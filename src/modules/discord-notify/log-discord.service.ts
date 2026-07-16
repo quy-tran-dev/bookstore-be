@@ -5,148 +5,56 @@ import axios from 'axios';
 
 @Injectable()
 export class DiscordLogService {
-  private webhookUrlLog: string;
-  private webhookUrlUpdate: string;
-  private webhookUrlOrder: string;
+  private webhookUrls: Record<string, string>;
+
   constructor(configService: ConfigService) {
-    this.webhookUrlLog = configService.get('DISCORD_WEBHOOK_URL_LOG') as string;
-    this.webhookUrlUpdate = configService.get(
-      'DISCORD_WEBHOOK_URL_UPDATE',
-    ) as string;
-    this.webhookUrlOrder = configService.get(
-      'DISCORD_WEBHOOK_URL_ORDER',
-    ) as string;
+    this.webhookUrls = {
+      LOG: configService.get('DISCORD_WEBHOOK_URL_LOG') as string,
+      UPDATE: configService.get('DISCORD_WEBHOOK_URL_UPDATE') as string,
+      ORDER: configService.get('DISCORD_WEBHOOK_URL_ORDER') as string,
+    };
   }
 
-  async sendLog(
+  // Hàm dùng chung cho mọi loại log (Gom code trùng lặp)
+  private async sendToWebhook(
+    url: string,
     level: 'INFO' | 'WARN' | 'ERROR',
     message: string,
     context?: string,
   ) {
-    // Cắt ngắn message và context nếu quá dài
-    const maxDescriptionLength = 2048;
-    const maxTitleLength = 256;
+    if (!url) return; // Bỏ qua nếu chưa config biến môi trường
 
-    const safeMessage = message.substring(0, maxDescriptionLength);
-    const safeContext = context
-      ? context.substring(0, maxTitleLength - level.length - 3)
-      : ''; // -3 cho ' - '
-
-    const timestamp = DateFormatUtil.formatDate(new Date());
+    const safeMessage = message.substring(0, 2048);
+    const safeContext = context ? context.substring(0, 250) : '';
 
     const embed = {
       title: `${level} ${safeContext ? `- ${safeContext}` : ''}`,
       description: safeMessage,
       color: this.getColor(level),
-      footer: {
-        text: timestamp,
-      },
+      footer: { text: DateFormatUtil.formatDate(new Date()) },
     };
 
-    try {
-      await axios.post(this.webhookUrlLog, {
-        embeds: [embed],
-      });
-      console.log('Discord log sent successfully.');
-    } catch (error) {
-      console.error('Failed to send Discord log:', error);
-      if (axios.isAxiosError(error) && error.response) {
-        console.error('Discord API response error:', error.response.data);
-      }
-    }
+    // KHÔNG dùng await bên ngoài, bắt lỗi ngay tại đây để không ảnh hưởng luồng chính
+    axios.post(url, { embeds: [embed] }).catch((error) => {
+      console.error('Failed to send Discord log:', error?.response?.data || error.message);
+    });
   }
 
-  async sendNewUpdate(
-    level: 'INFO' | 'WARN' | 'ERROR',
-    message: string,
-    context?: string,
-  ) {
-    // Cắt ngắn message và context nếu quá dài
-    const maxDescriptionLength = 2048;
-    const maxTitleLength = 256;
-
-    const safeMessage = message.substring(0, maxDescriptionLength);
-    const safeContext = context
-      ? context.substring(0, maxTitleLength - level.length - 3)
-      : ''; // -3 cho ' - '
-
-    const timestamp = DateFormatUtil.formatDate(new Date());
-
-    const embed = {
-      title: `${level} ${safeContext ? `- ${safeContext}` : ''}`,
-      description: safeMessage,
-      color: this.getColor(level),
-      footer: {
-        text: timestamp,
-      },
-    };
-
-    try {
-      await axios.post(this.webhookUrlUpdate, {
-        embeds: [embed],
-      });
-      console.log('Discord log sent successfully.');
-    } catch (error) {
-      console.error('Failed to send Discord log:', error);
-      if (axios.isAxiosError(error) && error.response) {
-        console.error('Discord API response error:', error.response.data);
-      }
-    }
+  // Các hàm public giờ chỉ còn 1 dòng duy nhất
+  sendLog(level: 'INFO' | 'WARN' | 'ERROR', message: string, context?: string) {
+    this.sendToWebhook(this.webhookUrls.LOG, level, message, context);
   }
 
-  async sendOrder(
-    level: 'INFO' | 'WARN' | 'ERROR',
-    message: string,
-    context?: string,
-  ) {
-    // Cắt ngắn message và context nếu quá dài
-    const maxDescriptionLength = 2048;
-    const maxTitleLength = 256;
+  sendNewUpdate(level: 'INFO' | 'WARN' | 'ERROR', message: string, context?: string) {
+    this.sendToWebhook(this.webhookUrls.UPDATE, level, message, context);
+  }
 
-    const safeMessage = message.substring(0, maxDescriptionLength);
-    const safeContext = context
-      ? context.substring(0, maxTitleLength - level.length - 3)
-      : ''; // -3 cho ' - '
-
-    const timestamp = DateFormatUtil.formatDate(new Date());
-
-    const embed = {
-      title: `${level} ${safeContext ? `- ${safeContext}` : ''}`,
-      description: safeMessage,
-      color: this.getColor(level),
-      footer: {
-        text: timestamp,
-      },
-    };
-
-    try {
-      await axios.post(this.webhookUrlOrder, {
-        embeds: [embed],
-      });
-      console.log('Discord log sent successfully.');
-    } catch (error) {
-      console.error('Failed to send Discord log:', error);
-      if (axios.isAxiosError(error) && error.response) {
-        console.error('Discord API response error:', error.response.data);
-      }
-    }
+  sendOrder(level: 'INFO' | 'WARN' | 'ERROR', message: string, context?: string) {
+    this.sendToWebhook(this.webhookUrls.ORDER, level, message, context);
   }
 
   private getColor(level: string): number {
-    switch (level) {
-      case 'INFO':
-        return 3447003;
-      case 'WARN':
-        return 16776960;
-      case 'ERROR':
-        return 16711680;
-      default:
-        return 8421504;
-    }
+    const colors = { INFO: 3447003, WARN: 16776960, ERROR: 16711680 };
+    return colors[level] || 8421504;
   }
 }
-// how to use
-// constructor(private readonly discordLogService: DiscordLogService) {}
-
-// await this.discordLogService.sendLog('ERROR', 'Không thể kết nối DB', 'UserService');
-// await this.discordLogService.sendLog('INFO', 'Sách mới được tạo', 'BookController');
