@@ -6,6 +6,7 @@ import {
   Res,
   Req,
   UseGuards,
+  Request,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import type { Response } from 'express';
@@ -13,10 +14,17 @@ import { AuthGuard } from '@nestjs/passport';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ConfigService } from '@nestjs/config';
+import { JwtRefreshGuard } from '@app/common/guards/jwt-refresh.guard';
+import { JwtAuthGuard } from '@app/common/guards/jwt-auth.guard';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService, private readonly configService: ConfigService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Post('register')
   async register(
@@ -63,9 +71,19 @@ export class AuthController {
   }
 
   // Đăng xuất
+  // ==========================================
+  @UseGuards(JwtAuthGuard)
   @Post('logout')
-  async logout(@Res({ passthrough: true }) res: Response) {
+  async logout(
+    @Request() req: any,
+    @Res({ passthrough: true }) res: Response, // Thêm Res
+  ) {
+    const userId = req.user.id;
+    await this.authService.logout(userId);
+    
+    // Xóa cookie chứa refresh_token ở trình duyệt
     res.clearCookie('refresh_token');
+    
     return { message: 'Đăng xuất thành công' };
   }
 
@@ -103,5 +121,31 @@ export class AuthController {
 
     // Chỉ trả Access Token về cho Frontend lưu vô Memory
     return { accessToken };
+  }
+
+  @UseGuards(JwtRefreshGuard)
+  @Post('refresh')
+  async refreshTokens(
+    @Request() req: any,
+    @Res({ passthrough: true }) res: Response, // Thêm Res vào đây
+  ) {
+    const userId = req.user.id;
+    const refreshToken = req.user.refreshToken;
+
+    const tokens = await this.authService.refreshTokens(userId, refreshToken);
+
+    // Bắt buộc phải set lại Cookie mới để trình duyệt cập nhật
+    this.setRefreshTokenCookie(res, tokens.refreshToken);
+
+    return { accessToken: tokens.accessToken };
+  }
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
+  }
+
+  @Post('reset-password')
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 }

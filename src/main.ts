@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
-import * as compression from 'compression';
+import compression from 'compression';
 import { ConfigService } from '@nestjs/config';
 import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { TransformResponseInterceptor } from './common/interceptors/transform.interceptor';
@@ -14,7 +14,7 @@ async function bootstrap() {
   });
   
   const configService = app.get(ConfigService);
-  const port = configService.get<string>('PORT') || 3000;
+  const port = configService.get<string>('PORT') || 4000;
   const nodeEnv = configService.get<string>('NODE_ENV');
   
   // Xử lý CORS Whitelist từ .env

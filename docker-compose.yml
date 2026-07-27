@@ -1,23 +1,29 @@
 version: '3.8'
 
 services:
-  # 1. Cấu hình Dịch vụ Database tích hợp AI
+  # 1. Database pgvector
   postgres_db:
-    image: pgvector/pgvector:pg16 
+    image: pgvector/pgvector:pg16
     container_name: bookstore_postgres
     restart: always
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-123}
-      POSTGRES_DB: ${DB_DATABASE:-bookstore_db}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-your_password_here}
+      POSTGRES_DB: ${DB_DATABASE:-bookshop_db}
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
-      - bookstore_network
+      - bookshop_network
+    # --- KHỐI BỔ SUNG HEALTHCHECK ---
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_DATABASE:-bookshop_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-  # 2. Cấu hình Dịch vụ Backend NestJS
+  # 2. Backend NestJS
   backend_app:
     build:
       context: .
@@ -46,16 +52,17 @@ services:
       DISCORD_WEBHOOK_URL_LOG: ${DISCORD_WEBHOOK_URL_LOG}
       DISCORD_WEBHOOK_URL_UPDATE: ${DISCORD_WEBHOOK_URL_UPDATE}
       DISCORD_WEBHOOK_URL_ORDER: ${DISCORD_WEBHOOK_URL_ORDER}
+    # --- CẬP NHẬT DEPENDS_ON ĐỂ CHỜ HEALTHCHECK ---
     depends_on:
       postgres_db:
         condition: service_healthy
     networks:
-      - bookstore_network
+      - bookshop_network
 
 volumes:
   pgdata:
     driver: local
 
 networks:
-  bookstore_network:
+  bookshop_network:
     driver: bridge
