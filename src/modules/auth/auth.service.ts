@@ -22,12 +22,14 @@ import { RegisterDto } from './dto/register.dto';
 import { v4 as uuidv4 } from 'uuid';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { MailProducer } from '../mail/mail.producer';
+import { DiscordService } from '../discord/discord.service';
 
 @Injectable()
 export class AuthService {
   // Biến môi trường (Nên chuyển vào .env)
-  private readonly rpID = 'localhost';
-  private readonly origin = 'http://localhost:3000'; // Đổi thành URL Frontend Next.js của bạn
+  private readonly rpID
+  private readonly origin
 
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
@@ -35,7 +37,12 @@ export class AuthService {
     private readonly authenticatorRepository: Repository<Authenticator>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-  ) {}
+    private readonly mailProducer: MailProducer,
+    private readonly discordService: DiscordService,
+  ) {
+    this.rpID = this.configService.get<string>('WEBAUTHN_RPID');
+    this.origin = this.configService.get<string>('ORIGIN');
+  }
 
   // ==========================================
   // 1. WEBAUTHN: Khởi tạo luồng Đăng nhập (Tạo Challenge)
@@ -168,7 +175,19 @@ export class AuthService {
 
     await this.userRepository.save(user);
 
-    console.log(`Gửi email tới ${user.email} với token: ${verificationToken}`);
+    // 1. Đẩy việc gửi Mail vào Queue (Nhanh và không block HTTP request)
+    await this.mailProducer.queueWelcomeEmail({
+      to: user.email,
+      fullName: user.userDetail?.fullName || '',
+      verifyToken: verificationToken,
+    });
+
+    // 2. Bắn log Discord
+    this.discordService.sendLog(
+      'INFO',
+      `Khách hàng mới đăng ký tài khoản: **${user.email}**`,
+      'AuthService',
+    );
 
     return this.generateTokens(user);
   }
@@ -226,6 +245,11 @@ export class AuthService {
         } as UserDetail,
       });
       user = await this.userRepository.save(user);
+      this.discordService.sendLog(
+        'INFO',
+        `Khách hàng mới đăng nhập qua Google: **${user.email}**`,
+        'AuthService',
+      );
     }
     return this.generateTokens(user);
   }
@@ -236,6 +260,7 @@ export class AuthService {
   async forgotPassword(dto: ForgotPasswordDto) {
     const user = await this.userRepository.findOne({
       where: { email: dto.email },
+      relations: { userDetail: true },
     });
     if (!user) {
       // Để bảo mật, không báo lỗi "Email không tồn tại" mà trả về thành công
@@ -256,9 +281,14 @@ export class AuthService {
     await this.userRepository.save(user);
 
     // TODO: Gửi email tới `user.email` kèm link: http://localhost:3000/reset-password?token=${resetToken}
-    console.log(
-      `Gửi email quên mật khẩu tới ${user.email} với token: ${resetToken}`,
-    );
+    // console.log(
+    //   `Gửi email quên mật khẩu tới ${user.email} với token: ${resetToken}`,
+    // );
+    await this.mailProducer.queueResetPassword({
+      to: user.email,
+      fullName: user.userDetail?.fullName || 'Khách hàng',
+      resetToken: resetToken,
+    });
 
     return {
       success: true,
@@ -291,6 +321,12 @@ export class AuthService {
     user.resetPasswordExpires = null;
 
     await this.userRepository.save(user);
+
+    this.discordService.sendLog(
+      'INFO',
+      `Người dùng **${user.email}** đã đặt lại mật khẩu thành công.`,
+      'AuthService',
+    );
 
     return {
       success: true,

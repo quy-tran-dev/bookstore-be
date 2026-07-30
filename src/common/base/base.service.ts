@@ -13,14 +13,24 @@ import { BaseEntity } from './base.entity';
 export class BaseService<T extends BaseEntity> {
   constructor(protected readonly repo: Repository<T>) {}
 
-  async create(data: Partial<T>): Promise<T> {
+  async create(data: Partial<T>, currentUserId?: string): Promise<T> {
+    if (currentUserId) {
+      (data as any).createBy = currentUserId;
+    }
     const entity = this.repo.create(data as DeepPartial<T>);
     return this.repo.save(entity);
   }
 
-  async createMany(datas: DeepPartial<T>[]): Promise<T[]> {
+  async createMany(
+    datas: DeepPartial<T>[],
+    currentUserId?: string,
+  ): Promise<T[]> {
     const entities: T[] = [];
+
     for (const data of datas) {
+      if (currentUserId) {
+        (data as any).createBy = currentUserId;
+      }
       const entity = this.repo.create(data as DeepPartial<T>);
       const result = await this.repo.save(entity);
       entities.push(result);
@@ -80,20 +90,33 @@ export class BaseService<T extends BaseEntity> {
     return entity;
   }
 
-  async update(id: string, data: Partial<T>): Promise<T> {
+  async update(
+    id: string,
+    data: Partial<T>,
+    currentUserId?: string,
+  ): Promise<T> {
     const entity = await this.findOne({ id } as FindOptionsWhere<T>);
+    if (currentUserId) {
+      (data as any).updateBy = currentUserId;
+    }
     Object.assign(entity, data);
     return await this.repo.save(entity);
   }
 
-  async softDelete(id: string): Promise<void> {
+  async softDelete(id: string, currentUserId?: string): Promise<void> {
+    if (currentUserId) {
+      await this.repo.update(id as any, { deleteBy: currentUserId } as any);
+    }
     const result = await this.repo.softDelete(id);
     if (result.affected === 0) {
       throw new NotFoundException('Entity not found or already deleted');
     }
   }
 
-  async restore(id: string): Promise<void> {
+  async restore(id: string, currentUserId?: string): Promise<void> {
+    if (currentUserId) {
+      await this.repo.update(id as any, { updateBy: currentUserId } as any);
+    }
     const result = await this.repo.restore(id);
     if (result.affected === 0) {
       throw new NotFoundException('Entity not found or not deleted');

@@ -5,6 +5,12 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { dataSourceOptions } from './database/data-source';
+import { AuthModule } from './modules/auth/auth.module';
+import { UsersModule } from './modules/users/users.module';
+import { BullModule } from '@nestjs/bull';
+import { BullConfigService } from './config/bull.config';
+import { MailModule } from './modules/mail/mail.module';
+import { DiscordModule } from './modules/discord/discord.module';
 
 @Module({
   imports: [
@@ -12,12 +18,19 @@ import { dataSourceOptions } from './database/data-source';
       isGlobal: true,
     }),
     TypeOrmModule.forRoot(dataSourceOptions),
+    BullModule.forRootAsync({
+      useClass: BullConfigService,
+    }),
     ThrottlerModule.forRoot([
       {
         ttl: 60000,
         limit: 10,
       },
     ]),
+    DiscordModule,
+    MailModule,
+    AuthModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers,

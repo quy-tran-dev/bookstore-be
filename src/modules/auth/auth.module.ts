@@ -11,9 +11,10 @@ import { UsersModule } from '../users/users.module';
 import { User } from '../users/entities/user.entity';
 import { Authenticator } from './entities/authenticator.entity';
 
-// Import các chiến lược xác thực
 import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
 import { GoogleStrategy } from './strategies/google.strategy';
+import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
@@ -30,12 +31,14 @@ import { GoogleStrategy } from './strategies/google.strategy';
         signOptions: { expiresIn: '15m' }, 
       }),
     }),
+    MailModule,
   ],
   controllers: [AuthController],
   providers: [
     AuthService, 
-    JwtAccessStrategy, 
-    GoogleStrategy
+    JwtAccessStrategy,
+    JwtRefreshStrategy,
+    GoogleStrategy,    
   ],
 })
 export class AuthModule {}

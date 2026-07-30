@@ -1,26 +1,37 @@
+console.log('>>> FILE jwt-refresh.strategy.ts LOADED');
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 
-// Đặt tên identifier là 'jwt-refresh' để tránh trùng lặp với Access Token
+// Hàm helper để trích xuất token từ Cookie thay vì Header
+const cookieExtractor = (req: Request) => {
+  let token = null;
+  if (req && req.cookies) {
+    token = req.cookies['refresh_token']; // Trùng với tên cookie bạn đã set ở AuthController
+  }
+  return token;
+};
+
 @Injectable()
 export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh') {
   constructor(configService: ConfigService) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // BẢO MẬT: Đọc token từ hàm custom cookieExtractor
+      jwtFromRequest: cookieExtractor,
       ignoreExpiration: false,
       secretOrKey: configService.get<string>('JWT_REFRESH_SECRET') as string,
-      passReqToCallback: true, // Cho phép lấy lại Request để móc ra chuỗi token cũ
+      passReqToCallback: true, 
     });
+    console.log('JwtRefreshStrategy ĐÃ ĐƯỢC KHỞI TẠO!');
   }
-
   async validate(req: Request, payload: any) {
-    const refreshToken = req.get('Authorization')?.replace('Bearer', '').trim();
+    // Lấy lại đúng cái token nguyên bản từ cookie
+    const refreshToken = req.cookies?.refresh_token;
     
     if (!refreshToken) {
-      throw new UnauthorizedException('Không tìm thấy Refresh Token');
+      throw new UnauthorizedException('Không tìm thấy Refresh Token trong Cookie');
     }
 
     return { 

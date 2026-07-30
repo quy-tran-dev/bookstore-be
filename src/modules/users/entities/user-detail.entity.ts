@@ -18,5 +18,5 @@ export class UserDetail extends BaseEntity {
   
   @OneToOne(() => User, (user) => user.userDetail)
   @JoinColumn({ name: 'user_id', referencedColumnName: 'id' })
-  user: User;
+  user?: User;
 }

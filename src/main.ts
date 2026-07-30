@@ -12,20 +12,22 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log', 'debug', 'verbose'],
   });
-  
+
   const configService = app.get(ConfigService);
   const port = configService.get<string>('PORT') || 4000;
   const nodeEnv = configService.get<string>('NODE_ENV');
-  
+
   // Xử lý CORS Whitelist từ .env
-  const corsOrigins = configService.get<string>('CORS_ORIGINS')?.split(',') || ['http://localhost:3000'];
+  const corsOrigins = configService.get<string>('CORS_ORIGINS')?.split(',') || [
+    'http://localhost:3000',
+  ];
 
   app.setGlobalPrefix('apis');
   app.use(helmet());
   app.useGlobalInterceptors(new TransformResponseInterceptor());
   app.use(compression());
   app.use(cookieParser());
-  
+
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   // Áp dụng mảng domain cho CORS
@@ -33,7 +35,7 @@ async function bootstrap() {
     origin: corsOrigins,
     credentials: true, // Bắt buộc true để Frontend gửi được HTTP-Only Cookie
   });
-  
+
   app.enableVersioning({
     type: VersioningType.URI,
     defaultVersion: '1',

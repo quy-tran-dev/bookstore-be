@@ -5,11 +5,12 @@ services:
   postgres_db:
     image: pgvector/pgvector:pg16
     container_name: bookstore_postgres
-    restart: always
+    # restart: always
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-your_password_here}
       POSTGRES_DB: ${DB_DATABASE:-bookshop_db}
+      TZ: Asia/Ho_Chi_Minh
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:
@@ -23,6 +24,19 @@ services:
       timeout: 5s
       retries: 5
 
+  redis_db:
+    image: redis:7-alpine
+    container_name: bookstore_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - bookshop_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # 2. Backend NestJS
   backend_app:
     build:
@@ -30,31 +44,20 @@ services:
       dockerfile: Dockerfile
       target: production
     container_name: bookstore_backend
-    restart: always
+    # restart: always
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-4000}:1234"
+    env_file:
+      - .env
     environment:
-      NODE_ENV: production
-      PORT: 3000
       DB_HOST: postgres_db
-      DB_PORT: 5432
-      DB_USERNAME: ${DB_USERNAME}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_DATABASE: ${DB_DATABASE}
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
-      EXP_DEFAULT: ${EXP_DEFAULT}
-      CORS_ORIGINS: ${CORS_ORIGINS}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
-      FRONTEND_URL: ${FRONTEND_URL}
-      DISCORD_WEBHOOK_URL_LOG: ${DISCORD_WEBHOOK_URL_LOG}
-      DISCORD_WEBHOOK_URL_UPDATE: ${DISCORD_WEBHOOK_URL_UPDATE}
-      DISCORD_WEBHOOK_URL_ORDER: ${DISCORD_WEBHOOK_URL_ORDER}
+      REDIS_HOST: redis_db
+      TZ: Asia/Ho_Chi_Minh
     # --- CẬP NHẬT DEPENDS_ON ĐỂ CHỜ HEALTHCHECK ---
     depends_on:
       postgres_db:
+        condition: service_healthy
+      redis_db:
         condition: service_healthy
     networks:
       - bookshop_network

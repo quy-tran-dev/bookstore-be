@@ -3,12 +3,13 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
 import { UserDetail } from './entities/user-detail.entity';
 import { UsersService } from './users.service';
-import { UsersController } from './users.controller';
+import { AdminUsersController } from '@app/apis/v1/admin/user/admin-user.controller';
+import { PublicUsersController } from '@app/apis/v1/public/user/public-user.controller';
 
 @Module({
   imports: [TypeOrmModule.forFeature([User, UserDetail])],
-  controllers: [UsersController],
+  controllers: [PublicUsersController, AdminUsersController],
   providers: [UsersService],
-  exports: [UsersService], // Phải export ra để AuthModule xài
+  exports: [UsersService],
 })
 export class UsersModule {}

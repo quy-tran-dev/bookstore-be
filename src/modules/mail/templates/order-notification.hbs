@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Cập nhật trạng thái Đơn hàng của bạn từ Book store</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #2C425C; /* Primary base color for text */
+            background-color: #FCFCFC; /* Secondary palette for background */
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background-color: #ffffff; /* White background for the main content area */
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            background-color: #2C425C; /* Primary base for header */
+            color: #FCFCFC;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            padding: 20px;
+            color: #2C425C;
+        }
+        .button {
+            display: inline-block;
+            background-color: #7AC789; /* Primary accent for buttons */
+            color: #ffffff !important; /* Important for some email clients */
+            padding: 12px 25px;
+            border-radius: 5px;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .footer {
+            background-color: #A7ADB1; /* Complementary accent for footer */
+            color: #2C425C; /* Or white, depending on contrast preference */
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+        }
+        .footer a {
+            color: #2C425C;
+            text-decoration: none;
+        }
+        .highlight-text {
+            color: #7AC789; /* Primary accent for highlighted text */
+            font-weight: bold;
+        }
+        .secondary-text {
+            color: #A7ADB1; /* Complementary accent for secondary text */
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Cập nhật trạng thái Đơn hàng</h1>
+        </div>
+        <div class="content">
+            <p>Xin chào <span class="highlight-text">{{username}}</span>,</p>
+            <p>Chúng tôi muốn thông báo rằng trạng thái đơn hàng <span class="highlight-text">#{{order_id}}</span> của bạn tại Book store đã được cập nhật.</p>
+
+            <p>Trạng thái mới: <strong class="highlight-text">{{new_status}}</strong></p>
+
+            {{#if tracking_number}}
+            <p>Mã vận đơn của bạn: <strong class="highlight-text">{{tracking_number}}</strong></p>
+            {{/if}}
+
+            <p>Bạn có thể theo dõi đơn hàng của mình tại đây:</p>
+            <p style="text-align: center; margin: 20px 0;">
+                <a href="{{order_tracking_link}}" class="button">Theo dõi Đơn hàng</a>
+            </p>
+            <p>Nếu bạn có bất kỳ câu hỏi nào, đừng ngần ngại liên hệ với chúng tôi.</p>
+            <p>Trân trọng,<br>Đội ngũ Book store</p>
+        </div>
+        <div class="footer">
+            <p>&copy; {{current_year}} Book store. Tất cả các quyền được bảo lưu.</p>
+            <p><a href="{{website_link}}">Trang chủ</a> | <a href="{{contact_link}}">Liên hệ</a> | <a href="{{privacy_policy_link}}">Chính sách bảo mật</a></p>
+        </div>
+    </div>
+</body>
+</html>

@@ -18,9 +18,6 @@ export class User extends BaseEntity {
   @Column({ name: 'is_verified', default: false })
   isVerified!: boolean;
 
-  @Column({ name: 'verification_token', nullable: true })
-  verificationToken?: string;
-
   @Column({
     name: 'verification_verified_at',
     type: 'timestamptz',
@@ -28,21 +25,28 @@ export class User extends BaseEntity {
   })
   emailVerifiedAt?: Date;
 
-  @Column({ name: 'reset_password_token', nullable: true })
-  resetPasswordToken?: string;
+  isBlocked?: boolean;
+  message?: string;
 
+  // Thêm type: 'varchar'
+  @Column({ name: 'hashed_refresh_token', type: 'varchar', nullable: true })
+  hashedRefreshToken?: string | null;
+
+  // Thêm type: 'varchar'
+  @Column({ name: 'verification_token', type: 'varchar', nullable: true })
+  verificationToken?: string | null;
+
+  // Thêm type: 'varchar'
+  @Column({ name: 'reset_password_token', type: 'varchar', nullable: true })
+  resetPasswordToken?: string | null;
+
+  // Giữ nguyên type: 'timestamptz'
   @Column({
     name: 'reset_password_expires',
     type: 'timestamptz',
     nullable: true,
   })
-  resetPasswordExpires?: Date;
-
-  @Column({ name: 'hashed_refresh_token', nullable: true })
-  hashedRefreshToken?: string;
-
-  isBlocked?: boolean;
-  message?: string;
+  resetPasswordExpires?: Date | null;
 
   @OneToMany(() => Authenticator, (authenticator) => authenticator.user)
   authenticators!: Authenticator[];
@@ -51,5 +55,5 @@ export class User extends BaseEntity {
   @OneToOne(() => UserDetail, (userDetail) => userDetail.user, {
     cascade: true,
   })
-  userDetail: UserDetail;
+  userDetail?: UserDetail;
 }
