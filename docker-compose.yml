@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  # 1. Database pgvector
+  postgres_db:
+    image: pgvector/pgvector:pg16
+    container_name: bookstore_postgres
+    # restart: always
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-your_password_here}
+      POSTGRES_DB: ${DB_DATABASE:-bookshop_db}
+      TZ: Asia/Ho_Chi_Minh
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - bookshop_network
+    # --- KHỐI BỔ SUNG HEALTHCHECK ---
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_DATABASE:-bookshop_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis_db:
+    image: redis:7-alpine
+    container_name: bookstore_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - bookshop_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Backend NestJS
+  backend_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: bookstore_backend
+    # restart: always
+    ports:
+      - "${PORT:-4000}:1234"
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres_db
+      REDIS_HOST: redis_db
+      TZ: Asia/Ho_Chi_Minh
+    # --- CẬP NHẬT DEPENDS_ON ĐỂ CHỜ HEALTHCHECK ---
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      redis_db:
+        condition: service_healthy
+    networks:
+      - bookshop_network
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  bookshop_network:
+    driver: bridge

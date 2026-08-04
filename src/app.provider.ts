@@ -5,8 +5,8 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { TransformResponseInterceptor } from './common/interceptors/transform.interceptor';
 import { LoggerService } from './common/services/logger.service';
-import { DiscordLogService } from './modules/discord-notify/log-discord.service';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
+import { DiscordService } from './modules/discord/discord.service';
 
 export const providers: Provider[] = [
   AppService,
@@ -27,5 +27,5 @@ export const providers: Provider[] = [
     useClass: AllExceptionsFilter,
   },
   LoggerService,
-  DiscordLogService,
+  DiscordService,
 ];

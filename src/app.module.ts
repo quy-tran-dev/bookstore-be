@@ -1,20 +1,25 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { providers } from './app.provider';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { typeOrmConfig } from './config/typeorm.config';
+import { dataSourceOptions } from './database/data-source';
+import { AuthModule } from './modules/auth/auth.module';
+import { UsersModule } from './modules/users/users.module';
+import { BullModule } from '@nestjs/bull';
+import { BullConfigService } from './config/bull.config';
+import { MailModule } from './modules/mail/mail.module';
+import { DiscordModule } from './modules/discord/discord.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: typeOrmConfig,
+    TypeOrmModule.forRoot(dataSourceOptions),
+    BullModule.forRootAsync({
+      useClass: BullConfigService,
     }),
     ThrottlerModule.forRoot([
       {
@@ -22,6 +27,10 @@ import { typeOrmConfig } from './config/typeorm.config';
         limit: 10,
       },
     ]),
+    DiscordModule,
+    MailModule,
+    AuthModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers,

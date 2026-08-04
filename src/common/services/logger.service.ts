@@ -1,13 +1,13 @@
+import { DiscordService } from '@app/modules/discord/discord.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { Request as ExpressRequest } from 'express';
-import { DiscordLogService } from '@app/modules/discord-notify/log-discord.service';
 
 @Injectable()
 export class LoggerService {
   // Khởi tạo context cho Logger để dễ nhìn trên console
   private logger = new Logger(LoggerService.name);
 
-  constructor(private readonly discordService: DiscordLogService) {}
+  constructor(private readonly discordService: DiscordService) {}
 
   // Đã bỏ async/await vì DiscordLogService giờ tự chạy ngầm
   logRequest(req: ExpressRequest, duration: number) {

@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
 @Injectable()
-export class DiscordLogService {
+export class DiscordService {
   private webhookUrls: Record<string, string>;
 
   constructor(configService: ConfigService) {
