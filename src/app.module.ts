@@ -12,6 +12,7 @@ import { BullConfigService } from './config/bull.config';
 import { MailModule } from './modules/mail/mail.module';
 import { DiscordModule } from './modules/discord/discord.module';
 import { CategoriesModule } from './modules/categories/categories.module';
+import { ProductsModule } from './modules/products/products.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { CategoriesModule } from './modules/categories/categories.module';
     AuthModule,
     UsersModule,
     CategoriesModule,
+    ProductsModule,
   ],
   controllers: [AppController],
   providers,
