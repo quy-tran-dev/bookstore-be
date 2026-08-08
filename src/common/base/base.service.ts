@@ -82,6 +82,35 @@ export class BaseService<T extends BaseEntity> {
       .getMany();
   }
 
+   async findPaginatedSoftDeleted( page: number = 1, limit: number = 10, options?: FindManyOptions<T>, // Cho phép truyền các điều kiện lọc, sắp xếp, v.v.
+  ): Promise<PaginationResult<T>> {
+    // Đảm bảo page và limit là số dương và có giá trị mặc định
+    page = Math.max(1, page);
+    limit = Math.max(1, limit);
+
+    const skip = (page - 1) * limit;
+
+    // Sử dụng findAndCount để lý dụng cả dữ liệu và tổng số bản ghi
+    const [data, total] = await this.repo.findAndCount({
+      ...options, // Kế thừa các tùy chonian lọc, sắp xếp, v.v. từ tham số options
+      skip,
+      take: limit,
+      withDeleted: true,
+    });
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages,
+      },
+    };
+  }
+
   async findOne(where: FindOptionsWhere<T>): Promise<T> {
     const entity = await this.repo.findOne({ where });
     if (!entity) {

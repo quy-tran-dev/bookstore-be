@@ -11,6 +11,7 @@ import { BullModule } from '@nestjs/bull';
 import { BullConfigService } from './config/bull.config';
 import { MailModule } from './modules/mail/mail.module';
 import { DiscordModule } from './modules/discord/discord.module';
+import { CategoriesModule } from './modules/categories/categories.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { DiscordModule } from './modules/discord/discord.module';
     MailModule,
     AuthModule,
     UsersModule,
+    CategoriesModule,
   ],
   controllers: [AppController],
   providers,
