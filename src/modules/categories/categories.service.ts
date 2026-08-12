@@ -9,6 +9,7 @@ import { IsNull, Repository } from 'typeorm';
 import { BaseService } from '@app/common/base/base.service';
 import { Category } from './entities/category.entity';
 import { SlugUtil } from '@app/common/utils/slug.util';
+import { StatusCategory } from '@app/common/enums/status-category.enum';
 
 @Injectable()
 export class CategoriesService extends BaseService<Category> {
@@ -120,43 +121,76 @@ export class CategoriesService extends BaseService<Category> {
 
   // --- LOGIC HIỂN THỊ PUBLIC ---
 
-  // Lấy toàn bộ cây thư mục (Dành cho Menu Public)
-  async getPublicTree(): Promise<Category[]> {
-    // TypeORM có hỗ trợ find trees, nhưng cách chủ động này giúp kiểm soát sâu hơn
-    return this.categoryRepository.find({
-      where: { parentId: IsNull() },
-      relations: {
-        children: {
-          children: true, // Lấy sâu xuống 1 tầng nữa
-        },
+  // --- LẤY MENU TREE CHO PUBLIC ---
+  async getPublicTree(): Promise<any[]> {
+    // Kẹp điều kiện isVerified: true và status: 1 ngay tại đây
+    const allCategories = await this.categoryRepository.find({
+      where: { 
+        isVerified: true, 
+        status: 1 
       },
+      order: { createdAt: 'ASC' }
     });
+
+    const categoryMap = new Map<string, any>();
+    const tree: any[] = [];
+
+    allCategories.forEach(cat => {
+      categoryMap.set(cat.id, { 
+        id: cat.id, name: cat.name, slug: cat.slug, imgUrl: cat.imgUrl, children: [] 
+      });
+    });
+
+    allCategories.forEach(cat => {
+      const mappedCat = categoryMap.get(cat.id);
+      if (cat.parentId) {
+        // Lưu ý: Nếu Danh mục Cha bị ẩn, hệ thống sẽ bỏ qua luôn các Danh mục Con
+        const parent = categoryMap.get(cat.parentId);
+        if (parent) parent.children.push(mappedCat);
+      } else {
+        tree.push(mappedCat);
+      }
+    });
+
+    return tree;
   }
 
-  // Lấy chi tiết Category kèm Breadcrumbs (Mảng các danh mục từ Gốc -> Hiện tại)
+  // --- LẤY CHI TIẾT & BREADCRUMBS ---
   async getCategoryWithBreadcrumbs(slug: string) {
-    const category = await this.categoryRepository.findOne({
-      where: { slug },
-      relations: {
-        children: true,
-      },
+    // Phải đảm bảo danh mục đang xem cũng phải thỏa mãn điều kiện Public
+    const category = await this.categoryRepository.findOne({ 
+      where: { 
+        slug,
+        isVerified: true,
+        status: StatusCategory.ACTIVE
+      } 
     });
-    if (!category) throw new NotFoundException('Không tìm thấy danh mục');
+    
+    if (!category) throw new NotFoundException('Không tìm thấy danh mục hoặc danh mục đang tạm ẩn');
 
     const breadcrumbs: Category[] = [];
-    let current: Category | null = category;
+    let currentId: string | null = category.id;
 
-    // Bám ngược lên gốc để tạo breadcrumbs
-    while (current) {
-      breadcrumbs.unshift(current); // Đẩy vào đầu mảng để xếp từ Gốc -> Con
-      if (!current.parentId) break;
-      current = await this.categoryRepository.findOne({
-        where: { id: current.parentId },
-      });
+    while (currentId) {
+      const currentCat = await this.categoryRepository.findOne({ where: { id: currentId } });
+      if (!currentCat) break;
+      
+      breadcrumbs.unshift(currentCat);
+      currentId = currentCat.parentId || null; 
     }
+
+    // Chỉ lấy các danh mục con cũng đang Active
+    const directChildren = await this.categoryRepository.find({ 
+      where: { 
+        parentId: category.id,
+        isVerified: true,
+        status: StatusCategory.ACTIVE
+      } 
+    });
 
     return {
       detail: category,
+      children: directChildren,
       breadcrumbs,
     };
   }

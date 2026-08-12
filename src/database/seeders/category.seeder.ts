@@ -1,11 +1,12 @@
 import { DataSource } from 'typeorm';
 import { Category } from '../../modules/categories/entities/category.entity';
 import { SlugUtil } from '../../common/utils/slug.util';
+import { StatusCategory } from '@app/common/enums/status-category.enum';
 
 export const seedCategories = async (dataSource: DataSource) => {
   console.log('\n Đang reset seed Categories...');
   const categoryRepository = dataSource.getRepository(Category);
-  
+
   // 1. Reset dữ liệu
   await dataSource.query(`TRUNCATE TABLE "categories" CASCADE`);
   console.log('\n Đang tạo dữ liệu Categories...');
@@ -14,7 +15,13 @@ export const seedCategories = async (dataSource: DataSource) => {
   const createCat = async (name: string, parentId?: string) => {
     const slug = SlugUtil.generate(name);
     return await categoryRepository.save(
-      categoryRepository.create({ name, slug, parentId })
+      categoryRepository.create({
+        name,
+        slug,
+        parentId,
+        isVerified: true,
+        status: StatusCategory.ACTIVE,
+      }),
     );
   };
 

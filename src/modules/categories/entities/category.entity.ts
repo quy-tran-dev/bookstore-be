@@ -1,6 +1,6 @@
-// src/modules/categories/entities/category.entity.ts
 import { Entity, Column, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { BaseEntity } from '@app/common/base/base.entity';
+import { StatusCategory } from '@app/common/enums/status-category.enum';
 
 @Entity('categories')
 export class Category extends BaseEntity {
@@ -12,6 +12,13 @@ export class Category extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   imgUrl?: string;
+
+  // --- TRẠNG THÁI HIỂN THỊ ---
+  @Column({ type: 'boolean', default: false })
+  isVerified?: boolean; // true = Đã duyệt, false = Nháp/Đang chỉnh sửa
+
+  @Column({ type: 'int', default: StatusCategory.INACTIVE })
+  status?: number; // 1 = Hiển thị (Active), 0 = Ẩn (Inactive)
 
   @Column({ name: 'parent_id', nullable: true })
   parentId?: string;

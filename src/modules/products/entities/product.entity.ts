@@ -3,6 +3,7 @@ import { BaseEntity } from '@app/common/base/base.entity';
 import { BookDetail } from './book-detail.entity';
 import { Author } from './author.entity';
 import { Category } from '../../categories/entities/category.entity';
+import { StatusProduct } from '@app/common/enums/status-product.enum';
 
 @Entity('products')
 export class Product extends BaseEntity {
@@ -36,8 +37,8 @@ export class Product extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   isVerified?: boolean;
 
-  @Column({ type: 'int', default: 0})
-  status?: number; // Ví dụ: 0 = Nháp, 1 = Đang bán, 2 = Hết hàng
+  @Column({ type: 'int', default: StatusProduct.INACTIVE })
+  status?: number; // Ví dụ: 0 = Tắt, 1 = Đang bán, 2 = Hết hàng
 
   @Column({ name: 'stock_quantity', type: 'int', default: 0 })
   stockQuantity?: number; // Số lượng tồn kho hiện tại
