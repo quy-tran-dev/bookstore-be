@@ -5,11 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { ILike, IsNull, Repository } from 'typeorm';
 import { BaseService } from '@app/common/base/base.service';
 import { Category } from './entities/category.entity';
 import { SlugUtil } from '@app/common/utils/slug.util';
 import { StatusCategory } from '@app/common/enums/status-category.enum';
+import { PublicCategoryDto } from './dto/public-category.dto';
 
 @Injectable()
 export class CategoriesService extends BaseService<Category> {
@@ -19,7 +20,69 @@ export class CategoriesService extends BaseService<Category> {
   ) {
     super(categoryRepository);
   }
+  // --- TẠO CÂY CHO ADMIN (CÓ FILTER, KHÔNG PHÂN TRANG) ---
+  async getAdminTree(options: { keyword?: string; status?: number; isVerified?: boolean; orderBy?: string; sort?: 'ASC' | 'DESC' }) {
+    const whereCondition: any = {};
 
+    if (options.keyword) {
+      whereCondition.name = ILike(`%${options.keyword}%`);
+    }
+    if (options.status !== undefined) {
+      whereCondition.status = options.status;
+    }
+    if (options.isVerified !== undefined) {
+      whereCondition.isVerified = options.isVerified;
+    }
+
+    const orderCondition: any = {};
+    if (options.orderBy) {
+      orderCondition[options.orderBy] = options.sort || 'DESC';
+    } else {
+      orderCondition.createdAt = 'DESC';
+    }
+
+    // Lấy toàn bộ data thỏa mãn điều kiện lọc
+    const allCategories = await this.categoryRepository.find({
+      where: whereCondition,
+      order: orderCondition,
+    });
+
+    const categoryMap = new Map<string, any>();
+    const tree: any[] = [];
+
+    // Nạp vào Hash Map
+    allCategories.forEach(cat => {
+      // Giữ nguyên toàn bộ trường audit (createdAt, status...) để Admin Table hiển thị
+      categoryMap.set(cat.id, { ...cat, children: [] });
+    });
+
+    // Móc nối Cha - Con
+    allCategories.forEach(cat => {
+      const mappedCat = categoryMap.get(cat.id);
+      
+      // Nếu có parentId VÀ parent đó thực sự tồn tại trong danh sách đang lọc
+      if (cat.parentId && categoryMap.has(cat.parentId)) {
+        categoryMap.get(cat.parentId).children.push(mappedCat);
+      } else {
+        // Nếu không có Cha, HOẶC Cha đã bị filter mất tiêu -> Cho làm Gốc luôn
+        tree.push(mappedCat);
+      }
+    });
+
+    return {
+      tree: tree,
+      total: allCategories.length // Trả về tổng số lượng để FE biết
+    };
+  }
+  async findAdminDetail(id: string): Promise<Category> {
+    const category = await this.categoryRepository.findOne({
+      where: { id },
+      relations: { parent: true } // Phải join parent để FE hiển thị Dropdown/Text
+    });
+    
+    if (!category) throw new NotFoundException('Không tìm thấy danh mục');
+    return category;
+  }
   // --- LOGIC GHI ĐÈ CREATE / UPDATE ---
   async create(
     data: Partial<Category>,
@@ -125,23 +188,27 @@ export class CategoriesService extends BaseService<Category> {
   async getPublicTree(): Promise<any[]> {
     // Kẹp điều kiện isVerified: true và status: 1 ngay tại đây
     const allCategories = await this.categoryRepository.find({
-      where: { 
-        isVerified: true, 
-        status: 1 
+      where: {
+        isVerified: true,
+        status: StatusCategory.ACTIVE,
       },
-      order: { createdAt: 'ASC' }
+      order: { createdAt: 'ASC' },
     });
 
     const categoryMap = new Map<string, any>();
     const tree: any[] = [];
 
-    allCategories.forEach(cat => {
-      categoryMap.set(cat.id, { 
-        id: cat.id, name: cat.name, slug: cat.slug, imgUrl: cat.imgUrl, children: [] 
+    allCategories.forEach((cat) => {
+      categoryMap.set(cat.id, {
+        id: cat.id,
+        name: cat.name,
+        slug: cat.slug,
+        imgUrl: cat.imgUrl,
+        children: [],
       });
     });
 
-    allCategories.forEach(cat => {
+    allCategories.forEach((cat) => {
       const mappedCat = categoryMap.get(cat.id);
       if (cat.parentId) {
         // Lưu ý: Nếu Danh mục Cha bị ẩn, hệ thống sẽ bỏ qua luôn các Danh mục Con
@@ -157,41 +224,39 @@ export class CategoriesService extends BaseService<Category> {
 
   // --- LẤY CHI TIẾT & BREADCRUMBS ---
   async getCategoryWithBreadcrumbs(slug: string) {
-    // Phải đảm bảo danh mục đang xem cũng phải thỏa mãn điều kiện Public
-    const category = await this.categoryRepository.findOne({ 
-      where: { 
-        slug,
-        isVerified: true,
-        status: StatusCategory.ACTIVE
-      } 
+    const category = await this.categoryRepository.findOne({
+      where: { slug, isVerified: true, status: StatusCategory.ACTIVE },
+      relations: { parent: true },
     });
-    
-    if (!category) throw new NotFoundException('Không tìm thấy danh mục hoặc danh mục đang tạm ẩn');
+
+    if (!category)
+      throw new NotFoundException('Không tìm thấy danh mục hoặc đang tạm ẩn');
 
     const breadcrumbs: Category[] = [];
     let currentId: string | null = category.id;
 
     while (currentId) {
-      const currentCat = await this.categoryRepository.findOne({ where: { id: currentId } });
+      const currentCat = await this.categoryRepository.findOne({
+        where: { id: currentId },
+      });
       if (!currentCat) break;
-      
+
       breadcrumbs.unshift(currentCat);
-      currentId = currentCat.parentId || null; 
+      currentId = currentCat.parentId || null;
     }
 
-    // Chỉ lấy các danh mục con cũng đang Active
-    const directChildren = await this.categoryRepository.find({ 
-      where: { 
-        parentId: category.id,
-        isVerified: true,
-        status: StatusCategory.ACTIVE
-      } 
+    // Lấy mảng con trực tiếp
+    const directChildren = await this.categoryRepository.find({
+      where: { parentId: category.id, isVerified: true, status: StatusCategory.ACTIVE },
+      relations: { parent: true },
     });
 
+    category.children = directChildren;
+
     return {
-      detail: category,
-      children: directChildren,
-      breadcrumbs,
+      detail: new PublicCategoryDto(category), // Lúc này detail đã ngậm đầy đủ children
+      children: directChildren.map((child) => new PublicCategoryDto(child)), // Giữ lại mảng rời bên ngoài nếu FE cần xài riêng
+      breadcrumbs: breadcrumbs.map((crumb) => new PublicCategoryDto(crumb)),
     };
   }
 }

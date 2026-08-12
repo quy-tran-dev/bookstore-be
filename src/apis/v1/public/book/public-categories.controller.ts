@@ -1,5 +1,5 @@
 import { CategoriesService } from '@app/modules/categories/categories.service';
-import { CategoryTreeResponse } from '@app/modules/categories/dto/public-category.dto';
+import { PublicCategoryDto } from '@app/modules/categories/dto/public-category.dto';
 import { Controller, Get, Param } from '@nestjs/common';
 @Controller('categories')
 export class PublicCategoriesController {
@@ -9,7 +9,7 @@ export class PublicCategoriesController {
   @Get('tree')
   async getTree() {
     const rootCategories = await this.categoriesService.getPublicTree();
-    return rootCategories.map(cat => new CategoryTreeResponse(cat));
+    return rootCategories.map(cat => new PublicCategoryDto(cat));
   }
 
   
