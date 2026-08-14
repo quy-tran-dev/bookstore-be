@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 
 export class UpdateCategoryDto {
   @IsString()
@@ -12,4 +12,11 @@ export class UpdateCategoryDto {
   @IsString()
   @IsOptional()
   imgUrl?: string;
+
+  @IsOptional()
+  isVerified?: boolean; // true = Đã duyệt, false = Nháp/Đang chỉnh sửa
+
+  @IsNumber()
+  @IsOptional()
+  status?: number; // 1 = Hiển thị (Active), 0 = Ẩn (Inactive)
 }

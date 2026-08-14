@@ -1,9 +1,10 @@
-import { Entity, Column, OneToOne, ManyToMany, JoinTable } from 'typeorm';
+import { Entity, Column, OneToOne, ManyToMany, JoinTable, OneToMany } from 'typeorm';
 import { BaseEntity } from '@app/common/base/base.entity';
 import { BookDetail } from './book-detail.entity';
 import { Author } from './author.entity';
 import { Category } from '../../categories/entities/category.entity';
 import { StatusProduct } from '@app/common/enums/status-product.enum';
+import { ProductAlbum } from './product-album.entity';
 
 @Entity('products')
 export class Product extends BaseEntity {
@@ -71,4 +72,7 @@ export class Product extends BaseEntity {
     inverseJoinColumn: { name: 'author_id', referencedColumnName: 'id' },
   })
   authors?: Author[];
+
+  @OneToMany(() => ProductAlbum, (album) => album.product, { cascade: true })
+  albums?: ProductAlbum[];
 }

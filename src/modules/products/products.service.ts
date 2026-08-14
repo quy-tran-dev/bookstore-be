@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { BaseService } from '@app/common/base/base.service';
 import { Product } from './entities/product.entity';
 import { SlugUtil } from '@app/common/utils/slug.util';
+import { AlbumFormatUtil } from '@app/common/utils/album-format.util';
 
 @Injectable()
 export class ProductsService extends BaseService<Product> {
@@ -18,7 +19,6 @@ export class ProductsService extends BaseService<Product> {
   private formatRelationData(data: any) {
     const formattedData = { ...data };
     
-    // Biến đổi mảng ID thành mảng Object cho TypeORM tự join bảng trung gian
     if (data.categoryIds) {
       formattedData.categories = data.categoryIds.map((id: string) => ({ id }));
       delete formattedData.categoryIds;
@@ -27,6 +27,14 @@ export class ProductsService extends BaseService<Product> {
     if (data.authorIds) {
       formattedData.authors = data.authorIds.map((id: string) => ({ id }));
       delete formattedData.authorIds;
+    }
+    if (data.albums && Array.isArray(data.albums)) {
+      const mappedAlbums = data.albums.map(item => ({
+        displayOrder: item.displayOrder !== undefined ? item.displayOrder : 0,
+        media: { id: item.mediaId } 
+      }));
+
+      formattedData.albums = AlbumFormatUtil.formatAlbumsOrder(mappedAlbums);
     }
 
     return formattedData;
@@ -91,4 +99,5 @@ export class ProductsService extends BaseService<Product> {
     if (!product) throw new NotFoundException('Truy xuất dữ liệu thất bại');
     return product;
   }
+
 }
