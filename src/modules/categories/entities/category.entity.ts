@@ -10,9 +10,6 @@ export class Category extends BaseEntity {
   @Column({ type: 'varchar', length: 255, unique: true })
   slug?: string;
 
-  @Column({ type: 'text', nullable: true })
-  imgUrl?: string;
-
   // --- TRẠNG THÁI HIỂN THỊ ---
   @Column({ type: 'boolean', default: false })
   isVerified?: boolean; // true = Đã duyệt, false = Nháp/Đang chỉnh sửa

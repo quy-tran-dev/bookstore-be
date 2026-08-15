@@ -13,11 +13,18 @@ import { MailModule } from './modules/mail/mail.module';
 import { DiscordModule } from './modules/discord/discord.module';
 import { CategoriesModule } from './modules/categories/categories.module';
 import { ProductsModule } from './modules/products/products.module';
+import { MediaModule } from './modules/media/media.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'public'), // Trỏ từ thư mục dist/ ngược ra gốc dự án
+      serveRoot: '/', // Đường dẫn gốc trên URL
     }),
     TypeOrmModule.forRoot(dataSourceOptions),
     BullModule.forRootAsync({
@@ -35,6 +42,7 @@ import { ProductsModule } from './modules/products/products.module';
     UsersModule,
     CategoriesModule,
     ProductsModule,
+    MediaModule,
   ],
   controllers: [AppController],
   providers,

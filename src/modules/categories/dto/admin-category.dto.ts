@@ -9,10 +9,6 @@ export class CreateCategoryDto {
   @IsOptional()
   slug?: string;
 
-  @IsString()
-  @IsOptional()
-  imgUrl?: string;
-
   @IsOptional()
   isVerified?: boolean; // true = Đã duyệt, false = Nháp/Đang chỉnh sửa
 

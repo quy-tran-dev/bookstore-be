@@ -15,9 +15,6 @@ export class Product extends BaseEntity {
   slug?: string;
 
   @Column({ type: 'text', nullable: true })
-  img?: string; // Ảnh đại diện chính
-
-  @Column({ type: 'text', nullable: true })
   shortDescribe?: string; // Mô tả ngắn để hiển thị ở card sản phẩm
 
   // Hỗ trợ pgvector (Cần cài extension pgvector trong DB, dimension thường là 768 hoặc 1536 tuỳ model AI)

@@ -53,6 +53,10 @@ services:
       DB_HOST: postgres_db
       REDIS_HOST: redis_db
       TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - .:/usr/src/app         # Mount toàn bộ code
+      - ./public:/usr/src/app/public  # Đảm bảo thư mục public được đồng bộ ra ngoài
+      
     # --- CẬP NHẬT DEPENDS_ON ĐỂ CHỜ HEALTHCHECK ---
     depends_on:
       postgres_db:

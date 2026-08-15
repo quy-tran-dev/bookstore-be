@@ -111,7 +111,6 @@ export const seedProducts = async (dataSource: DataSource) => {
       name: book.name,
       slug: SlugUtil.generate(book.name),
       // Dùng placeholder tự động gen chữ cho từng quyển sách để giao diện khỏi nhàm chán
-      img: `https://placehold.co/400x600/2a2a2a/ffffff?text=${encodeURIComponent(book.name.split(' ').slice(0,3).join(' '))}...`,
       shortDescribe: book.desc,
       cost: costPrice,
       price: book.price,

@@ -4,6 +4,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PartialType } from '@nestjs/mapped-types';
+import { CreateProductAlbumDto } from '@app/modules/media/dto/admin-media.dto';
 
 export class CreateBookDetailDto {
   @IsString()
@@ -44,10 +45,6 @@ export class CreateProductDto {
   @IsString()
   @IsOptional()
   slug?: string;
-
-  @IsString()
-  @IsOptional()
-  img?: string;
 
   @IsString()
   @IsOptional()
@@ -100,6 +97,12 @@ export class CreateProductDto {
   @IsUUID('all', { each: true, message: 'ID Tác giả phải là UUID' })
   @IsOptional()
   authorIds?: string[];
+
+  @IsArray()
+  @ValidateNested()
+  @Type(() => CreateProductAlbumDto)
+  @IsOptional()
+  albums?: CreateProductAlbumDto[]
 }
 
 export class UpdateProductDto extends PartialType(CreateProductDto) {}

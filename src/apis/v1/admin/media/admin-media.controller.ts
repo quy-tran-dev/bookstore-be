@@ -96,22 +96,9 @@ export class AdminMediaController {
     return result;
   }
   
-  // 🔥 THÊM MỚI: Trả về danh sách các thư mục con trong 1 thư mục
   @Get('folders')
-  getFolders(@Query('path') requestPath?: string) {
-    const safePath = requestPath ? requestPath.replace(/\.\./g, '') : ''; 
-    const fullPath = join('.', 'public', 'uploads', safePath);
-
-    if (!fs.existsSync(fullPath)) return [];
-
-    // Đọc ổ cứng và chỉ lấy các thư mục (bỏ qua file)
-    const items = fs.readdirSync(fullPath, { withFileTypes: true });
-    return items
-      .filter(item => item.isDirectory())
-      .map(item => ({
-        name: item.name,
-        path: requestPath ? `${requestPath}/${item.name}` : item.name
-      }));
+  getFolderStats() {
+    return this.mediaService.getFolderStats();
   }
 
   // 🛠 CẬP NHẬT: Cho phép API Get All lọc hình theo Folder
@@ -197,4 +184,18 @@ export class AdminMediaController {
     );
     return { message: 'Đã xóa record file' };
   }
+
+  // @Delete('soft/:id')
+  // async softRemove(@Param('id') id: string, @Req() req: any) {
+  //   // Lưu ý: Đây mới chỉ là xoá mềm record trong DB.
+  //   // Trong thực tế, baise cần gọi thêm logic xoá file vật lý trên ổ cúng hoặc S3 (nếu muốn xoá sạch)
+  //   await this.mediaService.softDelete(id, req.user?.id);
+  //   this.discordService.sendNewUpdate(
+  //     'WARN',
+  //     `**[Admin]** User ID \`${req.user?.id}\` vừa XÓA file ID: \`${id}\``,
+  //     'AdminMediaController',
+  //   );
+  //   return { message: 'Đã xóa record file' };
+  // }
+
 }

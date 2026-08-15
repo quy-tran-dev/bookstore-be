@@ -7,8 +7,12 @@ import { ProductsService } from './products.service';
 import { AuthorsService } from './authors.service';
 import { AdminProductsController } from '@app/apis/v1/admin/book/admin-products.controller';
 import { AdminAuthorsController } from '@app/apis/v1/admin/book/admin-authors.controller';
+import { MediaModule } from '../media/media.module';
 @Module({
-  imports: [TypeOrmModule.forFeature([Product, BookDetail, Author])],
+  imports: [
+    TypeOrmModule.forFeature([Product, BookDetail, Author]),
+    MediaModule,
+  ],
   controllers: [AdminProductsController, AdminAuthorsController],
   providers: [ProductsService, AuthorsService],
   exports: [ProductsService, AuthorsService],

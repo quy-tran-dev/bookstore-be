@@ -21,7 +21,7 @@ import { Role } from '@app/common/enums/role.enum';
 
 // IMPORT DISCORD SERVICE
 import { DiscordService } from '@app/modules/discord/discord.service';
-import { ILike } from 'typeorm';
+import { ILike, IsNull, Not } from 'typeorm';
 
 @Controller('admin/categories')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -162,7 +162,7 @@ export class AdminCategoriesController {
     return { message: 'Đã khôi phục danh mục' };
   }
 
- @Get('soft-delete')
+ @Get('soft-delete/get')
   getSoftDelete(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
@@ -173,6 +173,7 @@ export class AdminCategoriesController {
     if (keyword) {
       whereCondition.name = ILike(`%${keyword}%`);
     }
+    whereCondition.deletedAt = Not(IsNull());
 
     // Truyền điều kiện lọc vào hàm thùng rác
     // Lưu ý: BaseService của bạn phải hỗ trợ truyền options vào findPaginatedSoftDeleted nhé

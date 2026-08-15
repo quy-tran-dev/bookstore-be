@@ -9,10 +9,6 @@ export class UpdateCategoryDto {
   @IsOptional() // Cho phép Admin không cần gửi trường này lên
   slug?: string;
 
-  @IsString()
-  @IsOptional()
-  imgUrl?: string;
-
   @IsOptional()
   isVerified?: boolean; // true = Đã duyệt, false = Nháp/Đang chỉnh sửa
 

@@ -203,7 +203,6 @@ export class CategoriesService extends BaseService<Category> {
         id: cat.id,
         name: cat.name,
         slug: cat.slug,
-        imgUrl: cat.imgUrl,
         children: [],
       });
     });

@@ -22,6 +22,7 @@ import {
   CreateProductDto,
   UpdateProductDto,
 } from '@app/modules/products/dto/admin-product.dto';
+import { ILike, IsNull, Not } from 'typeorm';
 
 @Controller('admin/products')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -36,10 +37,10 @@ export class AdminProductsController {
   async create(@Body() dto: CreateProductDto, @Req() req: any) {
     const result = await this.productsService.create(dto, req.user?.id);
     this.discordService.sendNewUpdate(
-        'WARN',
-        ` **[Admin]** Vừa TẠO sách mới: **${result.name}**`,
-        'AdminProductsController',
-      );
+      'WARN',
+      ` **[Admin]** Vừa TẠO sách mới: **${result.name}**`,
+      'AdminProductsController',
+    );
     return result;
   }
 
@@ -47,14 +48,48 @@ export class AdminProductsController {
   findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('keyword') keyword?: string,
+    @Query('status') status?: string,
+    @Query('isVerified') isVerified?: string,
+    @Query('orderBy') orderBy?: string,
+    @Query('sort') sort?: 'ASC' | 'DESC',
   ) {
+    // 1. Khởi tạo object điều kiện lọc (Where)
+    const whereCondition: any = {};
+
+    if (keyword) {
+      whereCondition.name = ILike(`%${keyword}%`); // Tìm kiếm theo tên
+    }
+
+    if (status !== undefined) {
+      whereCondition.status = parseInt(status, 10);
+    }
+
+    if (isVerified !== undefined) {
+      // Chuyển chuỗi 'true'/'false' từ Query URL thành boolean
+      whereCondition.isVerified = isVerified === 'true';
+    }
+
+    // 2. Khởi tạo object sắp xếp (Order)
+    const orderCondition: any = {};
+    if (orderBy) {
+      // Nếu có truyền orderBy (vd: name, createdAt), xếp theo chiều sort (mặc định DESC)
+      orderCondition[orderBy] = sort || 'DESC';
+    } else {
+      // Mặc định luôn xếp mới nhất lên đầu
+      orderCondition.createdAt = 'DESC'; 
+    }
+
+    // 3. Đẩy vào BaseService
     return this.productsService.findAllPaginated(page, limit, {
+      where: whereCondition,
+      order: orderCondition,
       relations: {
         categories: true,
         authors: true,
       },
-      order: { createdAt: 'DESC' },
     });
+    
   }
 
   @Get(':id')
@@ -70,11 +105,11 @@ export class AdminProductsController {
   ) {
     const result = await this.productsService.update(id, dto, req.user?.id);
     this.discordService.sendNewUpdate(
-        'WARN',
-        ` **[Admin]** Vừa CẬP NHẬT sách: **${result.name}**`,
-        'AdminProductsController',
-      );
-      
+      'WARN',
+      ` **[Admin]** Vừa CẬP NHẬT sách: **${result.name}**`,
+      'AdminProductsController',
+    );
+
     return result;
   }
 
@@ -82,31 +117,40 @@ export class AdminProductsController {
   async remove(@Param('id') id: string, @Req() req: any) {
     await this.productsService.softDelete(id, req.user?.id);
     this.discordService.sendNewUpdate(
-        'WARN',
-        ` **[Admin]** Vừa XÓA sách ID: \`${id}\``,
-        'AdminProductsController',
-      );
+      'WARN',
+      ` **[Admin]** Vừa XÓA sách ID: \`${id}\``,
+      'AdminProductsController',
+    );
     return { message: 'Đã xóa sản phẩm' };
   }
 
   @Post('restore/:id')
   async restore(@Param('id') id: string, @Req() req: any) {
     await this.productsService.restore(id, req.user?.id);
-    this.discordService
-      .sendNewUpdate(
-        'WARN',
-        ` **[Admin]** Vừa KHÔI PHỤC sách ID: \`${id}\``,
-        'AdminProductsController',
-      );
+    this.discordService.sendNewUpdate(
+      'WARN',
+      ` **[Admin]** Vừa KHÔI PHỤC sách ID: \`${id}\``,
+      'AdminProductsController',
+    );
     return { message: 'Đã khôi phục sản phẩm' };
   }
 
-  @Get('soft-delete')
+  @Get('soft-delete/get')
   getSoftDelete(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('keyword') keyword?: string,
   ) {
-    // Nếu bạn có tuỳ chỉnh lại hàm findPaginatedSoftDeleted để nhận options thì thêm relations vào đây tương tự findAll nhé
-    return this.productsService.findPaginatedSoftDeleted(page, limit);
+    const whereCondition: any = {};
+
+    if (keyword) {
+      whereCondition.name = ILike(`%${keyword}%`);
+    }
+    whereCondition.deletedAt = Not(IsNull());
+
+    return this.productsService.findPaginatedSoftDeleted(page, limit, {
+      where: whereCondition,
+      order: { deletedAt: 'DESC' },
+    });
   }
 }
