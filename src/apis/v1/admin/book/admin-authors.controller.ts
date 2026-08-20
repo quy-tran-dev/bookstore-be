@@ -61,7 +61,6 @@ export class AdminAuthorsController {
       whereCondition.name = ILike(`%${keyword}%`); // Tìm kiếm theo tên
     }
 
-
     // 2. Khởi tạo object sắp xếp (Order)
     const orderCondition: any = {};
     if (orderBy) {
@@ -145,5 +144,18 @@ export class AdminAuthorsController {
       where: whereCondition,
       order: { deletedAt: 'DESC' },
     });
+  }
+
+  @Delete('hard/:id')
+  async hardRemove(@Param('id') id: string, @Req() req: any) {
+    await this.authorsService.hardDelete(id);
+
+    this.discordService.sendNewUpdate(
+      'WARN',
+      `**[Admin]** Vừa XÓA VĨNH VIỄN Tác giả ID: \`${id}\` và dọn dẹp ổ cứng`,
+      'AdminAuthorsController',
+    );
+
+    return { message: 'Đã xóa vĩnh viễn tác giả và file ảnh liên quan' };
   }
 }

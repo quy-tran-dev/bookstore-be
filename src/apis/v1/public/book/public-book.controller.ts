@@ -1,12 +1,13 @@
-import { Controller, Post, UseGuards, Get } from '@nestjs/common';
+import { Controller, Post, UseGuards, Get, Query, DefaultValuePipe, BadRequestException, ParseIntPipe } from '@nestjs/common';
 import { JwtAuthGuard } from '@app/common/guards/jwt-auth.guard';
 import { Roles } from '@app/common/decorators/roles.decorator';
 import { Role } from '@app/common/enums/role.enum';
 import { RolesGuard } from '@app/common/guards/role.guard';
+import { ProductsService } from '@app/modules/products/products.service';
 
 @Controller('books')
 export class PublicBookController {
-  
+  constructor(private readonly productsService: ProductsService) {}
   // API không có Guard -> Ai cũng xem được
   @Get()
   getAllBooks() {

@@ -31,6 +31,25 @@ export class Product extends BaseEntity {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   finalPrice?: number; // Giá thực bán (sau khi áp khuyến mãi)
 
+  // Cột lưu từ khóa AI tự bóc tách
+  @Column({ name: 'seo_keywords', type: 'text', nullable: true })
+  seoKeywords?: string;
+
+  // Cột lưu Vector 384 chiều của mô hình MiniLM
+  @Column({ type: 'vector', length: 384, nullable: true })
+  embedding?: number[];
+
+  // Cột tự động tính toán Full-text search (DB lo, code không cần đụng)
+  @Column({ 
+    name: 'document_with_weights', 
+    type: 'tsvector', 
+    select: false, 
+    insert: false, 
+    update: false,
+    nullable: true
+  })
+  documentWithWeights?: any;
+
   // --- TRẠNG THÁI ---
   @Column({ type: 'boolean', default: false })
   isVerified?: boolean;

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
 import { PartialType } from '@nestjs/mapped-types';
 
 export class CreateAuthorDto {
@@ -9,6 +9,14 @@ export class CreateAuthorDto {
   @IsString()
   @IsOptional()
   describe?: string;
+
+  @IsString()
+  @IsOptional()
+  slug?: string;
+
+  @IsUUID('all', { message: 'Media ID không hợp lệ' })
+  @IsOptional()
+  mediaId?: string;
 }
 
 export class UpdateAuthorDto extends PartialType(CreateAuthorDto) {}

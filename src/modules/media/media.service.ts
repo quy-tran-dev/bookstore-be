@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BaseService } from '@app/common/base/base.service';
@@ -94,5 +94,26 @@ export class MediaService extends BaseService<Media> {
       folderPath: f.folderPath, // VD: "products/nghe-thuat-sinh-ton"
       totalFiles: Number(f.totalFiles), // Trả về số lượng để FE hiện Badge (vd: 15 ảnh)
     }));
+  }
+
+  async hardDelete(id: string): Promise<void> {
+    // Phải thêm withDeleted: true phòng trường hợp ảnh đã bị soft delete trước đó
+    const media = await this.mediaRepository.findOne({ 
+      where: { id },
+      withDeleted: true 
+    });
+
+    if (!media) throw new NotFoundException('Không tìm thấy file');
+
+    // Xóa file vật lý trên ổ cứng
+    if (media.fileUrl) {
+      const physicalPath = join('.', 'public', media.fileUrl);
+      if (fs.existsSync(physicalPath)) {
+        fs.unlinkSync(physicalPath); // Chém bay file
+      }
+    }
+
+    // Quét sạch record trong Database
+    await this.mediaRepository.delete(id);
   }
 }

@@ -46,7 +46,7 @@ export class AdminCategoriesController {
     return result;
   }
 
- @Get()
+  @Get()
   findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
@@ -79,7 +79,7 @@ export class AdminCategoriesController {
       orderCondition[orderBy] = sort || 'DESC';
     } else {
       // Mặc định luôn xếp mới nhất lên đầu
-      orderCondition.createdAt = 'DESC'; 
+      orderCondition.createdAt = 'DESC';
     }
 
     // 3. Đẩy vào BaseService
@@ -90,7 +90,7 @@ export class AdminCategoriesController {
     });
   }
 
-  @Get("/tree")
+  @Get('/tree')
   findAllTree(
     // Bỏ page và limit đi vì dùng Tree thì trả về hết
     @Query('keyword') keyword?: string,
@@ -99,17 +99,18 @@ export class AdminCategoriesController {
     @Query('orderBy') orderBy?: string,
     @Query('sort') sort?: 'ASC' | 'DESC',
   ) {
-    
     // Convert dữ liệu từ query string (mặc định là string) sang đúng kiểu
-    const parsedStatus = status !== undefined ? parseInt(status, 10) : undefined;
-    const parsedIsVerified = isVerified !== undefined ? isVerified === 'true' : undefined;
+    const parsedStatus =
+      status !== undefined ? parseInt(status, 10) : undefined;
+    const parsedIsVerified =
+      isVerified !== undefined ? isVerified === 'true' : undefined;
 
     return this.categoriesService.getAdminTree({
       keyword,
       status: parsedStatus,
       isVerified: parsedIsVerified,
       orderBy,
-      sort
+      sort,
     });
   }
 
@@ -162,14 +163,14 @@ export class AdminCategoriesController {
     return { message: 'Đã khôi phục danh mục' };
   }
 
- @Get('soft-delete/get')
+  @Get('soft-delete/get')
   getSoftDelete(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('keyword') keyword?: string,
   ) {
     const whereCondition: any = {};
-    
+
     if (keyword) {
       whereCondition.name = ILike(`%${keyword}%`);
     }
@@ -180,7 +181,18 @@ export class AdminCategoriesController {
     return this.categoriesService.findPaginatedSoftDeleted(page, limit, {
       where: whereCondition,
       relations: { parent: true },
-      order: { deletedAt: 'DESC' } // Xếp theo thời gian xóa gần nhất
+      order: { deletedAt: 'DESC' }, // Xếp theo thời gian xóa gần nhất
     });
+  }
+
+  @Delete('hard/:id')
+  async hardRemove(@Param('id') id: string, @Req() req: any) {
+    await this.categoriesService.hardDelete(id);
+    this.discordService.sendNewUpdate(
+      'WARN',
+      `**[Admin]** Vừa XÓA VĨNH VIỄN danh mục ID: \`${id}\``,
+      'AdminCategoriesController',
+    );
+    return { message: 'Đã xóa vĩnh viễn danh mục và nối lại cây phân cấp' };
   }
 }

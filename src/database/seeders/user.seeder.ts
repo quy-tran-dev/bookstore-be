@@ -1,6 +1,8 @@
 import { DataSource } from 'typeorm';
 import { User } from '../../modules/users/entities/user.entity';
 import * as bcrypt from 'bcrypt';
+import { users } from './data/users.json';
+
 
 export const seedUsers = async (dataSource: DataSource) => {
   console.log('\n Đang reset seed Users...');
@@ -12,32 +14,11 @@ export const seedUsers = async (dataSource: DataSource) => {
 
   // 2. Tạo dữ liệu mới
   const defaultPassword = await bcrypt.hash('123456', 10);
-  const usersData : any = [
-    {
-      email: 'admin@bookstore.com',
-      password: defaultPassword,
-      role: 'ADMIN',
-      isVerified: true,
-      userDetail: { fullName: 'Admin Quản Trị', phone: '0999999999' },
-    },
-    {
-      email: 'customer1@bookstore.com',
-      password: defaultPassword,
-      role: 'CUSTOMER',
-      isVerified: true,
-      userDetail: { fullName: 'Khách Hàng Một', phone: '0988888881' },
-    },
-    {
-      email: 'customer2@bookstore.com',
-      password: defaultPassword,
-      role: 'CUSTOMER',
-      isVerified: true,
-      userDetail: { fullName: 'Khách Hàng Hai', phone: '0988888882' },
-    },
-  ];
+  const usersData = users;
 
   for (const u of usersData) {
-    await userRepository.save(userRepository.create(u));
+    u.password = defaultPassword;
+    await userRepository.save(userRepository.create(u as any));
   }
   
   console.log(' Seed Users thành công!');

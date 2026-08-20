@@ -11,17 +11,26 @@ import { Category } from './entities/category.entity';
 import { SlugUtil } from '@app/common/utils/slug.util';
 import { StatusCategory } from '@app/common/enums/status-category.enum';
 import { PublicCategoryDto } from './dto/public-category.dto';
+import { Product } from '../products/entities/product.entity';
 
 @Injectable()
 export class CategoriesService extends BaseService<Category> {
   constructor(
     @InjectRepository(Category)
     private readonly categoryRepository: Repository<Category>,
+    @InjectRepository(Product)
+    private readonly productRepository: Repository<Product>,
   ) {
     super(categoryRepository);
   }
   // --- TẠO CÂY CHO ADMIN (CÓ FILTER, KHÔNG PHÂN TRANG) ---
-  async getAdminTree(options: { keyword?: string; status?: number; isVerified?: boolean; orderBy?: string; sort?: 'ASC' | 'DESC' }) {
+  async getAdminTree(options: {
+    keyword?: string;
+    status?: number;
+    isVerified?: boolean;
+    orderBy?: string;
+    sort?: 'ASC' | 'DESC';
+  }) {
     const whereCondition: any = {};
 
     if (options.keyword) {
@@ -51,15 +60,15 @@ export class CategoriesService extends BaseService<Category> {
     const tree: any[] = [];
 
     // Nạp vào Hash Map
-    allCategories.forEach(cat => {
+    allCategories.forEach((cat) => {
       // Giữ nguyên toàn bộ trường audit (createdAt, status...) để Admin Table hiển thị
       categoryMap.set(cat.id, { ...cat, children: [] });
     });
 
     // Móc nối Cha - Con
-    allCategories.forEach(cat => {
+    allCategories.forEach((cat) => {
       const mappedCat = categoryMap.get(cat.id);
-      
+
       // Nếu có parentId VÀ parent đó thực sự tồn tại trong danh sách đang lọc
       if (cat.parentId && categoryMap.has(cat.parentId)) {
         categoryMap.get(cat.parentId).children.push(mappedCat);
@@ -71,15 +80,15 @@ export class CategoriesService extends BaseService<Category> {
 
     return {
       tree: tree,
-      total: allCategories.length // Trả về tổng số lượng để FE biết
+      total: allCategories.length, // Trả về tổng số lượng để FE biết
     };
   }
   async findAdminDetail(id: string): Promise<Category> {
     const category = await this.categoryRepository.findOne({
       where: { id },
-      relations: { parent: true } // Phải join parent để FE hiển thị Dropdown/Text
+      relations: { parent: true }, // Phải join parent để FE hiển thị Dropdown/Text
     });
-    
+
     if (!category) throw new NotFoundException('Không tìm thấy danh mục');
     return category;
   }
@@ -141,6 +150,42 @@ export class CategoriesService extends BaseService<Category> {
     }
 
     return result;
+  }
+
+  async softDelete(id: string, currentUserId?: string): Promise<void> {
+    await this.checkProductRelation(id);
+    await this.reassignChildrenBeforeDelete(id);
+    await super.softDelete(id, currentUserId);
+  }
+
+  async hardDelete(id: string): Promise<void> {
+    await this.checkProductRelation(id);
+    await this.reassignChildrenBeforeDelete(id);
+    await this.categoryRepository.delete(id);
+  }
+
+  // Helper xử lý logic nối lại node con
+  private async reassignChildrenBeforeDelete(categoryId: string) {
+    // Tìm category chuẩn bị xóa kèm theo parent của nó
+    const categoryToKill = await this.categoryRepository.findOne({
+      where: { id: categoryId },
+      relations: { parent: true },
+    });
+
+    if (!categoryToKill) throw new NotFoundException('Danh mục không tồn tại');
+
+    const grandParentId = categoryToKill.parent
+      ? categoryToKill.parent.id
+      : null;
+
+    // Dùng QueryBuilder update toàn bộ node con:
+    // Trỏ parentId của con về ông nội (grandParentId), nếu không có ông nội thì gán NULL (ra root)
+    await this.categoryRepository
+      .createQueryBuilder()
+      .update(Category)
+      .set({ parent: grandParentId ? { id: grandParentId } : null } as any)
+      .where('parentId = :id', { id: categoryId })
+      .execute();
   }
 
   // --- LOGIC KIỂM TRA BỔ TRỢ ---
@@ -246,7 +291,11 @@ export class CategoriesService extends BaseService<Category> {
 
     // Lấy mảng con trực tiếp
     const directChildren = await this.categoryRepository.find({
-      where: { parentId: category.id, isVerified: true, status: StatusCategory.ACTIVE },
+      where: {
+        parentId: category.id,
+        isVerified: true,
+        status: StatusCategory.ACTIVE,
+      },
       relations: { parent: true },
     });
 
@@ -257,5 +306,18 @@ export class CategoriesService extends BaseService<Category> {
       children: directChildren.map((child) => new PublicCategoryDto(child)), // Giữ lại mảng rời bên ngoài nếu FE cần xài riêng
       breadcrumbs: breadcrumbs.map((crumb) => new PublicCategoryDto(crumb)),
     };
+  }
+
+  private async checkProductRelation(categoryId: string) {
+    // Đếm xem có bao nhiêu cuốn sách đang thuộc danh mục này
+    const linkedProductsCount = await this.productRepository.count({
+      where: { categories: { id: categoryId } },
+    });
+
+    if (linkedProductsCount > 0) {
+      throw new BadRequestException(
+        `Không thể xóa! Danh mục này đang chứa ${linkedProductsCount} sản phẩm. Hãy gỡ hoặc chuyển danh mục cho các sản phẩm đó trước.`,
+      );
+    }
   }
 }

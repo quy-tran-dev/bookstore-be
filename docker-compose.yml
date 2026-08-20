@@ -54,7 +54,6 @@ services:
       REDIS_HOST: redis_db
       TZ: Asia/Ho_Chi_Minh
     volumes:
-      - .:/usr/src/app         # Mount toàn bộ code
       - ./public:/usr/src/app/public  # Đảm bảo thư mục public được đồng bộ ra ngoài
       
     # --- CẬP NHẬT DEPENDS_ON ĐỂ CHỜ HEALTHCHECK ---
@@ -65,9 +64,21 @@ services:
         condition: service_healthy
     networks:
       - bookshop_network
+  
+  ollama_ai:
+    image: ollama/ollama:latest
+    container_name: bookstore_ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - bookshop_network
+    volumes:
+      - ollama_data:/root/.ollama
 
 volumes:
   pgdata:
+    driver: local
+  ollama_data:
     driver: local
 
 networks:

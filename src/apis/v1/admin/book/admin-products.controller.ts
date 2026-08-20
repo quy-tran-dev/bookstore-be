@@ -77,7 +77,7 @@ export class AdminProductsController {
       orderCondition[orderBy] = sort || 'DESC';
     } else {
       // Mặc định luôn xếp mới nhất lên đầu
-      orderCondition.createdAt = 'DESC'; 
+      orderCondition.createdAt = 'DESC';
     }
 
     // 3. Đẩy vào BaseService
@@ -89,7 +89,6 @@ export class AdminProductsController {
         authors: true,
       },
     });
-    
   }
 
   @Get(':id')
@@ -152,5 +151,18 @@ export class AdminProductsController {
       where: whereCondition,
       order: { deletedAt: 'DESC' },
     });
+  }
+
+  @Delete('hard/:id')
+  async hardRemove(@Param('id') id: string, @Req() req: any) {
+    await this.productsService.hardDelete(id);
+
+    this.discordService.sendNewUpdate(
+      'WARN',
+      `**[Admin]** Vừa XÓA VĨNH VIỄN Sản phẩm ID: \`${id}\` và toàn bộ kho ảnh của nó`,
+      'AdminProductsController',
+    );
+
+    return { message: 'Đã xóa vĩnh viễn sản phẩm và dọn sạch ổ cứng' };
   }
 }

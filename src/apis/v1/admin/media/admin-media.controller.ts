@@ -197,5 +197,15 @@ export class AdminMediaController {
   //   );
   //   return { message: 'Đã xóa record file' };
   // }
-
+  
+  @Delete('hard/:id')
+  async hardRemove(@Param('id') id: string, @Req() req: any) {
+    await this.mediaService.hardDelete(id);
+    this.discordService.sendNewUpdate(
+      'WARN',
+      `**[Admin]** Vừa XÓA VĨNH VIỄN file ID: \`${id}\` khỏi ổ cứng`,
+      'AdminMediaController',
+    );
+    return { message: 'Đã xóa vĩnh viễn file vật lý và dữ liệu' };
+  }
 }
