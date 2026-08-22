@@ -28,7 +28,7 @@ import { MailModule } from '../mail/mail.module';
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_ACCESS_SECRET'),
         // Default tạm, thời gian sống thực tế sẽ định nghĩa đè lúc signAsync
-        signOptions: { expiresIn: '15m' }, 
+        signOptions: { expiresIn: '3h' }, 
       }),
     }),
     MailModule,
