@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BaseService } from '@app/common/base/base.service';
@@ -44,15 +48,20 @@ export class AuthorsService extends BaseService<Author> {
       avatar: data.mediaId ? { id: data.mediaId } : null,
     };
 
-    return super.create(payload, currentUserId);
+    await super.create(payload, currentUserId);
+
+    return this.findOneAdmin(payload.id);
   }
 
   async update(id: string, data: any, currentUserId?: string): Promise<Author> {
-    // Lấy thông tin cũ để biết slug hiện tại
-    if (!data.slug && data.name) data.slug = SlugUtil.generate(data.name);
-    if (data.slug) await this.validateSlugDuplication(data.slug, id);
+    // 1. Xử lý logic slug và media như cũ
+    if (!data.slug && data.name) {
+      data.slug = SlugUtil.generate(data.name);
+    }
+    if (data.slug) {
+      await this.validateSlugDuplication(data.slug, id);
+    }
 
-    // Nếu có up ảnh mới (hoặc đổi ảnh)
     if (data.mediaId) {
       await this.mediaService.moveMediaToSubfolder(
         data.mediaId,
@@ -66,7 +75,19 @@ export class AuthorsService extends BaseService<Author> {
       avatar: data.mediaId ? { id: data.mediaId } : undefined,
     };
 
-    return super.update(id, payload, currentUserId);
+    // 2. Gọi hàm update của base service (hoặc repository)
+    await super.update(id, payload, currentUserId);
+
+    return this.findOneAdmin(id);
+  }
+
+  async findOneAdmin(id: string): Promise<Author> {
+    const author = await this.authorRepository.findOne({
+      where: { id },
+      relations: { avatar: true },
+    });
+    if (!author) throw new NotFoundException('Tác giả không tồn tại');
+    return author;
   }
 
   async softDelete(id: string, currentUserId?: string): Promise<void> {

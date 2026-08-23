@@ -161,7 +161,15 @@ export class CategoriesService extends BaseService<Category> {
   async hardDelete(id: string): Promise<void> {
     await this.checkProductRelation(id);
     await this.reassignChildrenBeforeDelete(id);
-    await this.categoryRepository.delete(id);
+     const category = await this.categoryRepository.findOne({
+      where: { id },
+      withDeleted: true,
+    });
+
+    if (!category) throw new NotFoundException('Danh mục không tồn tại');
+
+
+    await this.categoryRepository.remove(category);
   }
 
   // Helper xử lý logic nối lại node con

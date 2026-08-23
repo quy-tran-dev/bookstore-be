@@ -123,10 +123,10 @@ export class AuthService {
       isVerified: user.isVerified,
     };
     const expDefault = this.configService.get<string>('EXP_DEFAULT') || '7d';
-
+    const expAccess = this.configService.get<string>('JWT_ACCESS_TIME') || '3h';
     const accessToken = await this.jwtService.signAsync(payload, {
       secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
-      expiresIn: '15m',
+      expiresIn: expAccess as any,
     });
 
     const refreshToken = await this.jwtService.signAsync(payload, {
