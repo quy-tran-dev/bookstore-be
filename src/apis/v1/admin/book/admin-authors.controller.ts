@@ -75,13 +75,13 @@ export class AdminAuthorsController {
     return this.authorsService.findAllPaginated(page, limit, {
       where: whereCondition,
       order: orderCondition,
+      relations: { avatar: true },
     });
   }
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    // BaseService yêu cầu object FindOptionsWhere
-    return this.authorsService.findOne({ id } as any);
+    return this.authorsService.findOneAdmin(id);
   }
 
   @Patch(':id')

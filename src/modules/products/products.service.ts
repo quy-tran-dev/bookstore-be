@@ -12,6 +12,7 @@ import { AlbumFormatUtil } from '@app/common/utils/album-format.util';
 import { MediaService } from '../media/media.service';
 import { AiService } from '../ai/ai.service';
 import { Category } from '../categories/entities/category.entity';
+import { MediaFolder } from '@app/common/enums/media-folder.enum';
 
 @Injectable()
 export class ProductsService extends BaseService<Product> {
@@ -55,16 +56,18 @@ export class ProductsService extends BaseService<Product> {
     if (!data.slug && data.name) data.slug = SlugUtil.generate(data.name);
     if (data.slug) await this.validateSlugDuplication(data.slug);
 
-    // 1. Move files vật lý
+    // 1. TỐI ƯU: Lọc danh sách ID ảnh và move hàng loạt
     if (data.albums && Array.isArray(data.albums)) {
-      for (const album of data.albums) {
-        if (album.mediaId) {
-          await this.mediaService.moveMediaToSubfolder(
-            album.mediaId,
-            'products',
-            data.slug,
-          );
-        }
+      const mediaIds = data.albums
+        .map((album) => album.mediaId)
+        .filter(Boolean); // Lọc bỏ các giá trị undefined/null
+
+      if (mediaIds.length > 0) {
+        await this.mediaService.moveMediaGroupToSubfolder(
+          mediaIds,
+          MediaFolder.PRODUCTS,
+          data.slug,
+        );
       }
     }
 
@@ -79,7 +82,7 @@ export class ProductsService extends BaseService<Product> {
     payload.seoKeywords = aiData.seoKeywords;
     payload.embedding = aiData.embedding;
 
-    // 3. Lưu DB (Xóa dòng gọi embedding 2 lần đi nhé)
+    // 3. Lưu DB
     const newProduct = await super.create(payload, currentUserId);
     return this.findOneWithDetails(newProduct.id);
   }
@@ -96,22 +99,37 @@ export class ProductsService extends BaseService<Product> {
 
     const entity = await this.productRepository.findOne({
       where: { id },
-      relations: { bookDetail: true, categories: true }, // Kéo categories cũ lên
+      relations: { bookDetail: true, categories: true },
     });
 
     if (!entity) throw new NotFoundException('Không tìm thấy sản phẩm');
 
+    // 1. TỐI ƯU UPDATE: Nếu có cập nhật album thì move hàng loạt ảnh mới luôn
+    if (data.albums && Array.isArray(data.albums)) {
+      const mediaIds = data.albums
+        .map((album) => album.mediaId)
+        .filter(Boolean);
+
+      if (mediaIds.length > 0) {
+        const folderSlug = data.slug || entity.slug; // Dùng slug mới nếu có đổi tên, không thì dùng slug cũ
+        await this.mediaService.moveMediaGroupToSubfolder(
+          mediaIds,
+          MediaFolder.PRODUCTS,
+          folderSlug,
+        );
+      }
+    }
+
     if (currentUserId) payload.updateBy = currentUserId;
 
-    // LOGIC UPDATE AI VECTOR: Chỉ chạy lại AI nếu Tên, Mô tả hoặc Danh mục bị thay đổi
+    // 2. LOGIC UPDATE AI VECTOR
     const isNameChanged = data.name && data.name !== entity.name;
     const isDescChanged =
       data.bookDetail?.description &&
       data.bookDetail?.description !== entity.bookDetail?.describe;
-    const isCategoriesChanged = data.categoryIds !== undefined; // Có truyền categoryIds mới lên
+    const isCategoriesChanged = data.categoryIds !== undefined;
 
     if (isNameChanged || isDescChanged || isCategoriesChanged) {
-      // Ưu tiên lấy dữ liệu mới, nếu không có thì dùng dữ liệu cũ đang lưu trong DB
       const finalName = data.name || entity.name;
       const finalDesc =
         data.bookDetail?.description || entity.bookDetail?.describe;
@@ -129,7 +147,7 @@ export class ProductsService extends BaseService<Product> {
       payload.embedding = aiData.embedding;
     }
 
-    // Gộp và lưu
+    // 3. Gộp và lưu
     const updatedEntity = this.productRepository.merge(entity, payload);
     await this.productRepository.save(updatedEntity);
 
@@ -246,26 +264,22 @@ export class ProductsService extends BaseService<Product> {
   }
 
   async searchHybridA(searchQuery: string, limit: number = 10) {
-    // 1. Tạo Vector từ câu hỏi
+    // 1. Tạo Vector và FTS Query
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
-    const formattedVector = `[${queryVector.join(',')}]`; // Biến chuẩn để truyền vào query
-
-    // 2. Format câu hỏi cho FTS (Nới lỏng bằng OR: |)
-    const normalizedQuery = searchQuery.trim().replace(/\s+/g, ' ');
-    const ftsQuery = normalizedQuery
+    const formattedVector = `[${queryVector.join(',')}]`;
+    const ftsQuery = searchQuery
+      .trim()
+      .replace(/\s+/g, ' ')
       .split(' ')
       .map((word) => `${word}:*`)
       .join(' | ');
 
-    // 3. Truy vấn DB (L2 Distance)
-    const products = await this.productRepository
+    // ==========================================
+    // BƯỚC 1: TÌM KIẾM AI L2 DISTANCE ĐỂ LẤY TOP 10 IDs
+    // ==========================================
+    const rawResults = await this.productRepository
       .createQueryBuilder('product')
-      .select([
-        'product.id AS product_id',
-        'product.name AS product_name',
-        'product.price AS product_price',
-        'product.slug AS product_slug',
-      ])
+      .select(['product.id AS id'])
       .addSelect(
         `(0.6 * (1 - (product.embedding <-> :embedding))) + 
          (0.4 * ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)))`,
@@ -276,43 +290,98 @@ export class ProductsService extends BaseService<Product> {
       .andWhere('product.deleted_at IS NULL')
       .andWhere(
         new Brackets((qb) => {
+          // Ngưỡng 1.2 dành riêng cho L2 Distance
           qb.where('product.embedding <-> :embedding < 1.2').orWhere(
             "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
           );
         }),
       )
-      .setParameters({
-        embedding: formattedVector, // 👈 Đã fix lỗi tên biến tại đây
-        ftsQuery: ftsQuery,
-      })
+      .setParameters({ embedding: formattedVector, ftsQuery })
       .orderBy('final_score', 'DESC')
       .limit(limit)
       .getRawMany();
 
-    return products;
+    if (rawResults.length === 0) return [];
+
+    // Trích xuất mảng ID
+    const productIds = rawResults.map((r) => r.id);
+
+    // ==========================================
+    // BƯỚC 2: KÉO DỮ LIỆU QUAN HỆ (BỎ EMBEDDING)
+    // ==========================================
+    const products = await this.productRepository.find({
+      where: { id: In(productIds) },
+      relations: {
+        categories: true,
+        authors: true,
+        albums: { media: true },
+        bookDetail: true,
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        price: true,
+        finalPrice: true,
+        shortDescribe: true,
+        stockQuantity: true,
+        soldCount: true,
+      },
+    });
+
+    // ==========================================
+    // BƯỚC 3: MAPPING THÀNH DTO ẢO
+    // ==========================================
+    const formattedProducts = rawResults
+      .map((raw) => {
+        const p = products.find((prod) => prod.id === raw.id);
+        if (!p) return null;
+
+        return {
+          id: p.id,
+          name: p.name,
+          slug: p.slug,
+          price: p.price,
+          finalPrice: p.finalPrice,
+          shortDescribe: p.shortDescribe,
+          stockQuantity: p.stockQuantity,
+          soldCount: p.soldCount,
+          categories:
+            p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
+          authors: p.authors?.map((a) => ({ id: a.id, name: a.name })) || [],
+          albums:
+            p.albums
+              ?.map((al) => ({
+                id: al.id,
+                url: al.media?.fileUrl,
+                displayOrder: al.displayOrder,
+              }))
+              .sort((a, b) => Number(b.displayOrder) - Number(a.displayOrder)) || [],
+          searchScore: parseFloat(raw.final_score).toFixed(4),
+        };
+      })
+      .filter(Boolean);
+
+    return formattedProducts;
   }
 
   async searchHybridB(searchQuery: string, limit: number = 10) {
-    // 1. Tạo Vector từ câu hỏi
+    // 1. Tạo Vector và FTS Query
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
-    const formattedVector = `[${queryVector.join(',')}]`; // Biến chuẩn để truyền vào query
-
-    // 2. Format câu hỏi cho FTS (Nới lỏng bằng OR: |)
-    const normalizedQuery = searchQuery.trim().replace(/\s+/g, ' ');
-    const ftsQuery = normalizedQuery
+    const formattedVector = `[${queryVector.join(',')}]`;
+    const ftsQuery = searchQuery
+      .trim()
+      .replace(/\s+/g, ' ')
       .split(' ')
       .map((word) => `${word}:*`)
       .join(' | ');
 
-    // 3. Truy vấn DB (Cosine Distance)
-    const products = await this.productRepository
+    // ==========================================
+    // BƯỚC 1: TÌM KIẾM AI ĐỂ LẤY TOP 10 IDs VÀ ĐIỂM SỐ
+    // ==========================================
+    const rawResults = await this.productRepository
       .createQueryBuilder('product')
-      .select([
-        'product.id AS product_id',
-        'product.name AS product_name',
-        'product.price AS product_price',
-        'product.slug AS product_slug',
-      ])
+      .select(['product.id AS id'])
       .addSelect(
         `(0.6 * (1 - (product.embedding <=> :embedding))) + 
          (0.4 * ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)))`,
@@ -328,14 +397,78 @@ export class ProductsService extends BaseService<Product> {
           );
         }),
       )
-      .setParameters({
-        embedding: formattedVector, // 👈 Đã fix lỗi tên biến tại đây
-        ftsQuery: ftsQuery,
-      })
+      .setParameters({ embedding: formattedVector, ftsQuery })
       .orderBy('final_score', 'DESC')
       .limit(limit)
       .getRawMany();
 
-    return products;
+    if (rawResults.length === 0) return [];
+
+    // Trích xuất mảng ID từ kết quả thô
+    const productIds = rawResults.map((r) => r.id);
+
+    // ==========================================
+    // BƯỚC 2: KÉO DỮ LIỆU ĐẦY ĐỦ KÈM QUAN HỆ (BỎ EMBEDDING)
+    // ==========================================
+    const products = await this.productRepository.find({
+      where: { id: In(productIds) },
+      relations: {
+        categories: true,
+        authors: true,
+        albums: { media: true }, // Kéo media từ albums
+        bookDetail: true,
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        price: true,
+        finalPrice: true,
+        shortDescribe: true,
+        stockQuantity: true,
+        soldCount: true,
+      },
+    });
+
+    // ==========================================
+    // BƯỚC 3: MAPPING THÀNH DTO ẢO CHO FRONTEND
+    // ==========================================
+    // Phải map lại vì lệnh .find() của TypeORM không giữ đúng thứ tự orderBy điểm số của Bước 1
+    const formattedProducts = rawResults
+      .map((raw) => {
+        const p = products.find((prod) => prod.id === raw.id);
+        if (!p) return null;
+
+        return {
+          id: p.id,
+          name: p.name,
+          slug: p.slug,
+          price: p.price,
+          finalPrice: p.finalPrice,
+          shortDescribe: p.shortDescribe,
+          stockQuantity: p.stockQuantity,
+          soldCount: p.soldCount,
+          // Ép dữ liệu relations gọn gàng lại cho FE dễ dùng
+          categories:
+            p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
+          authors: p.authors?.map((a) => ({ id: a.id, name: a.name })) || [],
+          // Lấy danh sách ảnh và đẩy ảnh isDefault lên đầu tiên
+          albums:
+            p.albums
+              ?.map((al) => ({
+                id: al.id,
+                url: al.media?.fileUrl,
+                displayOrder: al.displayOrder,
+              }))
+              .sort(
+                (a, b) => Number(b.displayOrder) - Number(a.displayOrder),
+              ) || [],
+          // Kèm theo điểm số để log xem AI chấm điểm thế nào
+          searchScore: parseFloat(raw.final_score).toFixed(4),
+        };
+      })
+      .filter(Boolean); // Lọc bỏ null
+
+    return formattedProducts;
   }
 }

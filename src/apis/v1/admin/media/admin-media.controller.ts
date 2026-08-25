@@ -30,6 +30,7 @@ import { UploadMultipleImageInterceptor } from '@app/common/interceptors/upload-
 import { Media } from '@app/modules/media/entities/media.entity';
 import * as fs from 'fs';
 import { join } from 'path';
+import { MoveMediaGroupDto } from '@app/modules/media/dto/move-media-group.dto';
 
 @Controller('admin/medias')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -82,6 +83,32 @@ export class AdminMediaController {
   @Get('grouped')
   getGrouped() {
     return this.mediaService.getGroupedMedia();
+  }
+
+  @Patch('move-group')
+  async moveMediaGroup(@Body() moveMediaGroupDto: MoveMediaGroupDto) {
+    const updatedMedias = await this.mediaService.moveMediaGroupToSubfolder(
+      moveMediaGroupDto.mediaIds || [],
+      moveMediaGroupDto.baseFolder || 'general',
+      moveMediaGroupDto.subFolder || '',
+    );
+
+    this.discordService.sendNewUpdate(
+      'INFO',
+      `**[Admin]** User ID \`${moveMediaGroupDto.mediaIds?.length}\` vừa DI CHUYỂN ${moveMediaGroupDto.mediaIds?.length} tệp tin vào thư mục \`${moveMediaGroupDto.subFolder}\``,
+      'AdminMediaController',
+    );
+
+    if (updatedMedias.length === 0) {
+      return {
+        message: 'Không tìm thấy tệp tin.',
+      };
+    }
+
+    return {
+      message: `Đã di chuyển thành công ${updatedMedias.length} tệp tin.`,
+      data: updatedMedias,
+    };
   }
 
   // API này thường được gọi ngầm sau khi upload file thành công
