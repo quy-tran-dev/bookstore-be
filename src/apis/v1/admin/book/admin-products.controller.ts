@@ -49,48 +49,63 @@ export class AdminProductsController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('keyword') keyword?: string,
+    @Query('categoryId') categoryId?: string,
+    @Query('authorId') authorId?: string,
     @Query('status') status?: string,
     @Query('isVerified') isVerified?: string,
     @Query('orderBy') orderBy?: string,
     @Query('sort') sort?: 'ASC' | 'DESC',
   ) {
-    // 1. Khởi tạo object điều kiện lọc (Where)
-    const whereCondition: any = {};
+    return this.productsService.fetchProductsWithQuery(page, limit, {
+      keyword,
+      categoryId,
+      authorId,
+      status,
+      isVerified,
+      orderBy,
+      sort,
+    });
+  }
 
-    if (keyword) {
-      whereCondition.name = ILike(`%${keyword}%`); // Tìm kiếm theo tên
-    }
+  @Get('category/:categoryId')
+  findByCategory(
+    @Param('categoryId') categoryId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('keyword') keyword?: string,
+    @Query('status') status?: string,
+    @Query('isVerified') isVerified?: string,
+    @Query('orderBy') orderBy?: string,
+    @Query('sort') sort?: 'ASC' | 'DESC',
+  ) {
+    return this.productsService.fetchProductsWithQuery(page, limit, {
+      keyword,
+      categoryId, // Gán categoryId từ Param vào
+      status,
+      isVerified,
+      orderBy,
+      sort,
+    });
+  }
 
-    if (status !== undefined) {
-      whereCondition.status = parseInt(status, 10);
-    }
-
-    if (isVerified !== undefined) {
-      // Chuyển chuỗi 'true'/'false' từ Query URL thành boolean
-      whereCondition.isVerified = isVerified === 'true';
-    }
-
-    // 2. Khởi tạo object sắp xếp (Order)
-    const orderCondition: any = {};
-    if (orderBy) {
-      // Nếu có truyền orderBy (vd: name, createdAt), xếp theo chiều sort (mặc định DESC)
-      orderCondition[orderBy] = sort || 'DESC';
-    } else {
-      // Mặc định luôn xếp mới nhất lên đầu
-      orderCondition.createdAt = 'DESC';
-    }
-
-    // 3. Đẩy vào BaseService
-    return this.productsService.findAllPaginated(page, limit, {
-      where: whereCondition,
-      order: orderCondition,
-      relations: {
-        categories: true,
-        authors: true,
-        albums: {
-          media: true,
-        },
-      },
+  @Get('author/:authorId')
+  findByAuthor(
+    @Param('authorId') authorId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('keyword') keyword?: string,
+    @Query('status') status?: string,
+    @Query('isVerified') isVerified?: string,
+    @Query('orderBy') orderBy?: string,
+    @Query('sort') sort?: 'ASC' | 'DESC',
+  ) {
+    return this.productsService.fetchProductsWithQuery(page, limit, {
+      keyword,
+      authorId, 
+      status,
+      isVerified,
+      orderBy,
+      sort,
     });
   }
 
