@@ -87,6 +87,9 @@ export class AdminProductsController {
       relations: {
         categories: true,
         authors: true,
+        albums: {
+          media: true,
+        },
       },
     });
   }

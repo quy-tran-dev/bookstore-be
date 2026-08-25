@@ -11,6 +11,7 @@ import { MediaService } from '../media/media.service';
 import { SlugUtil } from '@app/common/utils/slug.util';
 import { UpdateAuthorDto } from './dto/admin-author.dto';
 import { Product } from './entities/product.entity';
+import { MediaFolder } from '@app/common/enums/media-folder.enum';
 
 @Injectable()
 export class AuthorsService extends BaseService<Author> {
@@ -36,7 +37,7 @@ export class AuthorsService extends BaseService<Author> {
       // Sẽ move ảnh vào folder: /uploads/authors/to-huyen-dong
       await this.mediaService.moveMediaToSubfolder(
         data.mediaId,
-        'authors',
+        MediaFolder.AUTHORS,
         slug,
       );
     }
@@ -65,7 +66,7 @@ export class AuthorsService extends BaseService<Author> {
     if (data.mediaId) {
       await this.mediaService.moveMediaToSubfolder(
         data.mediaId,
-        'authors',
+        MediaFolder.AUTHORS,
         data.slug,
       );
     }

@@ -23,8 +23,18 @@ import { join } from 'path';
       isGlobal: true,
     }),
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', 'public'), // Trỏ từ thư mục dist/ ngược ra gốc dự án
-      serveRoot: '/', // Đường dẫn gốc trên URL
+      rootPath: join(__dirname, '..', 'public'),
+      serveRoot: '/',
+      serveStaticOptions: {
+        setHeaders: (res) => {
+          // Lấy Domain FE từ file .env
+          const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3001';
+          
+          res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+          res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+          res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        },
+      },
     }),
     TypeOrmModule.forRoot(dataSourceOptions),
     BullModule.forRootAsync({

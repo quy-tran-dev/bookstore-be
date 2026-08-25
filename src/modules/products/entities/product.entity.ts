@@ -17,9 +17,9 @@ export class Product extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   shortDescribe?: string; // Mô tả ngắn để hiển thị ở card sản phẩm
 
-  // Hỗ trợ pgvector (Cần cài extension pgvector trong DB, dimension thường là 768 hoặc 1536 tuỳ model AI)
-  @Column({ type: 'vector', length: 768, nullable: true })
-  embeddingVector?: string;
+  // // Hỗ trợ pgvector (Cần cài extension pgvector trong DB, dimension thường là 768 hoặc 1536 tuỳ model AI)
+  // @Column({ type: 'vector', length: 768, nullable: true })
+  // embeddingVector?: string;
 
   // --- LOGIC GIÁ CẢ ---
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
@@ -36,7 +36,7 @@ export class Product extends BaseEntity {
   seoKeywords?: string;
 
   // Cột lưu Vector 384 chiều của mô hình MiniLM
-  @Column({ type: 'vector', length: 384, nullable: true })
+  @Column({ type: 'vector', length: 384, nullable: true, select: false})
   embedding?: number[];
 
   // Cột tự động tính toán Full-text search (DB lo, code không cần đụng)
