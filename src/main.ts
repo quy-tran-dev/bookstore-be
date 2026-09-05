@@ -1,9 +1,9 @@
-import { NestFactory, Reflector } from '@nestjs/core';
+import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
 import compression from 'compression';
 import { ConfigService } from '@nestjs/config';
-import { ClassSerializerInterceptor, Logger, ValidationPipe, VersioningType } from '@nestjs/common';
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { TransformResponseInterceptor } from './common/interceptors/transform.interceptor';
 import cookieParser from 'cookie-parser';
 
@@ -29,8 +29,6 @@ async function bootstrap() {
   app.use(cookieParser());
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-
-  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
 
   // Áp dụng mảng domain cho CORS
   app.enableCors({

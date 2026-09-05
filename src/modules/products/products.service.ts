@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, ILike, In, Repository } from 'typeorm';
 import { BaseService } from '@app/common/base/base.service';
 import { Product } from './entities/product.entity';
 import { SlugUtil } from '@app/common/utils/slug.util';
@@ -263,6 +263,67 @@ export class ProductsService extends BaseService<Product> {
     return { seoKeywords, embedding };
   }
 
+  async fetchProductsWithQuery(
+    page: number,
+    limit: number,
+    filters: {
+      keyword?: string;
+      categoryId?: string;
+      authorId?: string;
+      status?: string;
+      isVerified?: string;
+      orderBy?: string;
+      sort?: 'ASC' | 'DESC';
+    },
+  ) {
+    const { keyword, categoryId, authorId, status, isVerified, orderBy, sort } =
+      filters;
+
+    // 1. Khởi tạo object điều kiện lọc (Where)
+    const whereCondition: any = {};
+
+    if (keyword) {
+      whereCondition.name = ILike(`%${keyword}%`);
+    }
+
+    if (categoryId) {
+      whereCondition.categories = { id: categoryId };
+    }
+
+    if (authorId) {
+      whereCondition.authors = { id: authorId };
+    }
+
+    if (status !== undefined) {
+      whereCondition.status = parseInt(status, 10);
+    }
+
+    if (isVerified !== undefined) {
+      whereCondition.isVerified = isVerified === 'true';
+    }
+
+    // 2. Khởi tạo object sắp xếp (Order)
+    const orderCondition: any = {};
+    if (orderBy) {
+      orderCondition[orderBy] = sort || 'DESC';
+    } else {
+      orderCondition.createdAt = 'DESC';
+    }
+
+    // 3. Đẩy vào Service
+    return this.findAllPaginated(page, limit, {
+      where: whereCondition,
+      order: orderCondition,
+      relations: {
+        categories: true,
+        authors: true,
+        albums: {
+          media: true,
+        },
+      },
+    });
+  }
+
   async searchHybridA(searchQuery: string, limit: number = 10) {
     // 1. Tạo Vector và FTS Query
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
@@ -356,7 +417,9 @@ export class ProductsService extends BaseService<Product> {
                 url: al.media?.fileUrl,
                 displayOrder: al.displayOrder,
               }))
-              .sort((a, b) => Number(b.displayOrder) - Number(a.displayOrder)) || [],
+              .sort(
+                (a, b) => Number(b.displayOrder) - Number(a.displayOrder),
+              ) || [],
           searchScore: parseFloat(raw.final_score).toFixed(4),
         };
       })

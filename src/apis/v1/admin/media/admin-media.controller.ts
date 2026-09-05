@@ -31,7 +31,6 @@ import { Media } from '@app/modules/media/entities/media.entity';
 import * as fs from 'fs';
 import { join } from 'path';
 import { MoveMediaGroupDto } from '@app/modules/media/dto/move-media-group.dto';
-import { SkipThrottle } from '@nestjs/throttler';
 
 @Controller('admin/medias')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -43,7 +42,6 @@ export class AdminMediaController {
   ) {}
 
   // Gọi API: POST /admin/medias/upload-multiple?folder=events&subFolder=tet-2026
-  @SkipThrottle()
   @Post('upload-multiple')
   @UseInterceptors(UploadMultipleImageInterceptor('files', 10))
   async uploadMultipleFiles(

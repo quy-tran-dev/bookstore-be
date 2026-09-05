@@ -16,8 +16,6 @@ import { ProductsModule } from './modules/products/products.module';
 import { MediaModule } from './modules/media/media.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
-import { NotificationsModule } from './modules/notifications/notifications.module';
-import { OrdersModule } from './modules/orders/orders.module';
 
 @Module({
   imports: [
@@ -45,7 +43,7 @@ import { OrdersModule } from './modules/orders/orders.module';
     ThrottlerModule.forRoot([
       {
         ttl: 60000,
-        limit: 30,
+        limit: 10,
       },
     ]),
     DiscordModule,
@@ -55,8 +53,6 @@ import { OrdersModule } from './modules/orders/orders.module';
     CategoriesModule,
     ProductsModule,
     MediaModule,
-    NotificationsModule,
-    OrdersModule,
   ],
   controllers: [AppController],
   providers,
