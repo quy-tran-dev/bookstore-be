@@ -29,4 +29,9 @@ export class MailProcessor {
       'MailProcessor'
     );
   }
+
+  @Process('job_order_confirmation')
+  async handleOrderConfirmation(job: Job) {
+    await this.mailService.sendOrderConfirmationEmail(job.data);
+  }
 }

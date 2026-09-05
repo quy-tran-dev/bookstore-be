@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
-import { MailWelcomePayload, MailResetPwdPayload } from './interfaces/mail-payload.interface';
+import { MailWelcomePayload, MailResetPwdPayload, MailOrderConfirmationPayload } from './interfaces/mail-payload.interface';
 
 @Injectable()
 export class MailProducer {
@@ -19,5 +19,9 @@ export class MailProducer {
 
   async queueResetPassword(payload: MailResetPwdPayload) {
     await this.mailQueue.add('job_reset_pwd', payload, this.defaultOptions);
+  }
+  
+  async queueOrderConfirmation(payload: MailOrderConfirmationPayload) {
+    await this.mailQueue.add('job_order_confirmation', payload, this.defaultOptions);
   }
 }
