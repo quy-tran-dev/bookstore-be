@@ -13,6 +13,7 @@ import { MediaService } from '../media/media.service';
 import { AiService } from '../ai/ai.service';
 import { Category } from '../categories/entities/category.entity';
 import { MediaFolder } from '@app/common/enums/media-folder.enum';
+import { StatusProduct } from '@app/common/enums/status-product.enum';
 
 @Injectable()
 export class ProductsService extends BaseService<Product> {
@@ -358,6 +359,39 @@ export class ProductsService extends BaseService<Product> {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  async findOneBy(whereCondition: any = {}, relations?: any) {
+    const product = await this.repo.findOne({
+      where: whereCondition,
+      relations,
+    });
+    if (!product) throw new NotFoundException('Không tìm thấy sản phẩm này hoặc đã ngừng kinh doanh.');
+    return product;
+  }
+
+  async getProductsForCart(productIds: string[]) {
+    if (!productIds || productIds.length === 0) return [];
+
+    return this.repo.find({
+      where: {
+        id: In(productIds),
+        status: StatusProduct.ACTIVE,
+        isVerified: true,
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        price: true,
+        finalPrice: true,
+        stockQuantity: true,
+        soldCount: true,
+      },
+      relations: {
+        albums: { media: true },
+      },
+    });
   }
 
   async searchHybridA(searchQuery: string, limit: number = 10) {

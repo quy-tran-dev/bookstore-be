@@ -168,7 +168,6 @@ export class CategoriesService extends BaseService<Category> {
 
     if (!category) throw new NotFoundException('Danh mục không tồn tại');
 
-
     await this.categoryRepository.remove(category);
   }
 
@@ -328,5 +327,14 @@ export class CategoriesService extends BaseService<Category> {
         `Không thể xóa! Danh mục này đang chứa ${linkedProductsCount} sản phẩm. Hãy gỡ hoặc chuyển danh mục cho các sản phẩm đó trước.`,
       );
     }
+  }
+
+  async findOneBy(whereCondition: any = {}): Promise<Category> {
+    const category = await this.categoryRepository.findOne({
+      where: whereCondition,
+      relations: { parent: true },
+    });
+    if (!category) throw new NotFoundException('Không tìm thấy danh mục');
+    return category;
   }
 }

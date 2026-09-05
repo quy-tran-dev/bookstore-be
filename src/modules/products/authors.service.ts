@@ -137,4 +137,14 @@ export class AuthorsService extends BaseService<Author> {
       });
     }
   }
+
+  async findOneBy(whereCondition: any = {}): Promise<Author> {
+
+    const author = await this.authorRepository.findOne({
+      where: whereCondition,
+      relations: { avatar: true },
+    });
+    if (!author) throw new NotFoundException('Tác giả không tồn tại');
+    return author;
+  }
 }

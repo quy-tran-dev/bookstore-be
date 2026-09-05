@@ -12,6 +12,7 @@ import { AiModule } from '../ai/ai.module';
 import { PublicProductsController } from '@app/apis/v1/public/book/public-products.controller';
 import { ProductAlbum } from './entities/product-album.entity';
 import { Category } from '../categories/entities/category.entity';
+import { PublicAuthorsController } from '@app/apis/v1/public/book/public-authors.controller';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -28,6 +29,7 @@ import { Category } from '../categories/entities/category.entity';
     AdminProductsController,
     AdminAuthorsController,
     PublicProductsController,
+    PublicAuthorsController,
   ],
   providers: [ProductsService, AuthorsService],
   exports: [ProductsService, AuthorsService, TypeOrmModule],
