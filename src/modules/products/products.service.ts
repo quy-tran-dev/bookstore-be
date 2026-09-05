@@ -99,7 +99,11 @@ export class ProductsService extends BaseService<Product> {
 
     const entity = await this.productRepository.findOne({
       where: { id },
-      relations: { bookDetail: true, categories: true },
+      relations: {
+        bookDetail: true,
+        categories: true,
+        authors: true,
+      },
     });
 
     if (!entity) throw new NotFoundException('Không tìm thấy sản phẩm');
@@ -148,8 +152,8 @@ export class ProductsService extends BaseService<Product> {
     }
 
     // 3. Gộp và lưu
-    const updatedEntity = this.productRepository.merge(entity, payload);
-    await this.productRepository.save(updatedEntity);
+    Object.assign(entity, payload);
+    await this.productRepository.save(entity);
 
     return this.findOneWithDetails(id);
   }
@@ -279,49 +283,81 @@ export class ProductsService extends BaseService<Product> {
     const { keyword, categoryId, authorId, status, isVerified, orderBy, sort } =
       filters;
 
-    // 1. Khởi tạo object điều kiện lọc (Where)
-    const whereCondition: any = {};
+    // Chuẩn hóa phân trang
+    page = Math.max(1, page);
+    limit = Math.max(1, limit);
+    const skip = (page - 1) * limit;
 
+    // Khởi tạo QueryBuilder
+    const queryBuilder = this.repo
+      .createQueryBuilder('product')
+      // Lấy data quan hệ trả về cho Client (Giữ nguyên toàn bộ danh sách)
+      .leftJoinAndSelect('product.categories', 'categories')
+      .leftJoinAndSelect('product.authors', 'authors')
+      .leftJoinAndSelect('product.albums', 'albums')
+      .leftJoinAndSelect('albums.media', 'media');
+
+    // 1. Lọc theo Keyword (Dùng ILIKE để không phân biệt hoa thường)
     if (keyword) {
-      whereCondition.name = ILike(`%${keyword}%`);
+      queryBuilder.andWhere('product.name ILIKE :keyword', {
+        keyword: `%${keyword}%`,
+      });
     }
 
-    if (categoryId) {
-      whereCondition.categories = { id: categoryId };
-    }
-
-    if (authorId) {
-      whereCondition.authors = { id: authorId };
-    }
-
+    // 2. Lọc theo các trường cơ bản
     if (status !== undefined) {
-      whereCondition.status = parseInt(status, 10);
+      queryBuilder.andWhere('product.status = :status', {
+        status: parseInt(status, 10),
+      });
     }
 
     if (isVerified !== undefined) {
-      whereCondition.isVerified = isVerified === 'true';
+      queryBuilder.andWhere('product.isVerified = :isVerified', {
+        isVerified: isVerified === 'true',
+      });
     }
 
-    // 2. Khởi tạo object sắp xếp (Order)
-    const orderCondition: any = {};
+    if (categoryId) {
+      queryBuilder.innerJoin(
+        'product.categories',
+        'filterCategory',
+        'filterCategory.id = :categoryId',
+        { categoryId },
+      );
+    }
+
+    if (authorId) {
+      queryBuilder.innerJoin(
+        'product.authors',
+        'filterAuthor',
+        'filterAuthor.id = :authorId',
+        { authorId },
+      );
+    }
+
+    // 4. Khởi tạo object sắp xếp (Order)
     if (orderBy) {
-      orderCondition[orderBy] = sort || 'DESC';
+      // Bắt buộc phải có tiền tố "product." để tránh lỗi trùng tên cột
+      queryBuilder.orderBy(`product.${orderBy}`, sort || 'DESC');
     } else {
-      orderCondition.createdAt = 'DESC';
+      queryBuilder.orderBy('product.createdAt', 'DESC');
     }
 
-    // 3. Đẩy vào Service
-    return this.findAllPaginated(page, limit, {
-      where: whereCondition,
-      order: orderCondition,
-      relations: {
-        categories: true,
-        authors: true,
-        albums: {
-          media: true,
-        },
+    // 5. Phân trang & Thực thi (Vượt qua BaseService)
+    queryBuilder.skip(skip).take(limit);
+
+    // getManyAndCount giải quyết triệt để lỗi phân trang sai số lượng khi có JOIN
+    const [data, total] = await queryBuilder.getManyAndCount();
+
+    return {
+      data,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
       },
-    });
+    };
   }
 
   async searchHybridA(searchQuery: string, limit: number = 10) {

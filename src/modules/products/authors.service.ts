@@ -49,9 +49,9 @@ export class AuthorsService extends BaseService<Author> {
       avatar: data.mediaId ? { id: data.mediaId } : null,
     };
 
-    await super.create(payload, currentUserId);
+    const newAuthor = await super.create(payload, currentUserId);   
 
-    return this.findOneAdmin(payload.id);
+    return this.findOneAdmin(newAuthor.id);
   }
 
   async update(id: string, data: any, currentUserId?: string): Promise<Author> {
