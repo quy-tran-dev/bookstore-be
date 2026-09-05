@@ -21,9 +21,9 @@ export class OrderItem extends BaseEntity {
   @Column({ type: 'int' })
   quantity?: number;
 
-  @Column({ type: 'int' })
+  @Column({ type: 'decimal' })
   unitPrice?: number; // Giá của 1 quyển lúc đặt mua
 
-  @Column({ type: 'int' })
+  @Column({ type: 'decimal' })
   totalPrice?: number; // quantity * unitPrice
 }

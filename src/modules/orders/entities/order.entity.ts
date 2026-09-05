@@ -34,13 +34,13 @@ export class Order extends BaseEntity {
   noteAdmin?: string;
 
   // --- TÀI CHÍNH ---
-  @Column({ type: 'int', default: 0 })
+  @Column({ type: 'decimal', default: 0 })
   totalAmount?: number; // Tổng tiền sách
 
-  @Column({ type: 'int', default: 0 })
+  @Column({ type: 'decimal', default: 0 })
   shippingFee?: number; // Phí vận chuyển
 
-  @Column({ type: 'int', default: 0 })
+  @Column({ type: 'decimal', default: 0 })
   finalAmount?: number; // Tổng phải thanh toán (totalAmount + shippingFee)
 
   // --- TRẠNG THÁI ---

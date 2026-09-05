@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   MailWelcomePayload,
   MailResetPwdPayload,
+  MailOrderConfirmationPayload,
 } from './interfaces/mail-payload.interface';
 
 @Injectable()
@@ -57,4 +58,30 @@ export class MailService {
       },
     });
   }
+
+  async sendOrderConfirmationEmail(payload: MailOrderConfirmationPayload) {
+    // Nếu bạn có link FE tracking đơn hàng thì ráp vào, không thì cho link mặc định
+    const trackingLink = payload.order_tracking_link || `${this.configService.get('FRONTEND_URL')}/my-orders`;
+
+    await this.baseMailer.sendMail({
+      to: payload.to,
+      subject: `[Bookstore] Xác nhận đơn hàng #${payload.order_id}`,
+      template: 'order-confirmation', // Map đúng tên file order-confirmation.hbs
+      context: {
+        username: payload.username,
+        order_id: payload.order_id,
+        order_date: payload.order_date,
+        total_amount: payload.total_amount,
+        shipping_address: payload.shipping_address,
+        items: payload.items,
+        order_tracking_link: trackingLink,
+        // Các biến mặc định của hệ thống
+        current_year: this.current_year,
+        website_link: this.website_link,
+        contact_link: this.contact_link,
+        privacy_policy_link: this.privacy_policy_link,
+      },
+    });
+  }
+  
 }

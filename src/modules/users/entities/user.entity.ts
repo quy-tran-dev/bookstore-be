@@ -2,6 +2,7 @@ import { Entity, Column, OneToMany, OneToOne } from 'typeorm';
 import { BaseEntity } from '@app/common/base/base.entity';
 import { Authenticator } from '@app/modules/auth/entities/authenticator.entity';
 import { UserDetail } from './user-detail.entity';
+import { Exclude } from 'class-transformer';
 
 @Entity('users')
 export class User extends BaseEntity {
@@ -9,10 +10,12 @@ export class User extends BaseEntity {
   email!: string;
 
   // Thêm mật khẩu (Có thể null nếu user đăng ký bằng Google/Passkeys từ đầu)
-  @Column({ type: 'varchar', length: 255, nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true, })
+  @Exclude()
   password?: string;
 
   @Column({ type: 'varchar', length: 50, default: 'CUSTOMER' })
+  // @Exclude()
   role!: 'ADMIN' | 'CUSTOMER';
 
   @Column({ name: 'is_verified', default: false })
@@ -30,14 +33,17 @@ export class User extends BaseEntity {
 
   // Thêm type: 'varchar'
   @Column({ name: 'hashed_refresh_token', type: 'varchar', nullable: true })
+  @Exclude()
   hashedRefreshToken?: string | null;
 
   // Thêm type: 'varchar'
   @Column({ name: 'verification_token', type: 'varchar', nullable: true })
+  @Exclude()
   verificationToken?: string | null;
 
   // Thêm type: 'varchar'
   @Column({ name: 'reset_password_token', type: 'varchar', nullable: true })
+  @Exclude()
   resetPasswordToken?: string | null;
 
   // Giữ nguyên type: 'timestamptz'
@@ -46,6 +52,7 @@ export class User extends BaseEntity {
     type: 'timestamptz',
     nullable: true,
   })
+  @Exclude()
   resetPasswordExpires?: Date | null;
 
   @OneToMany(() => Authenticator, (authenticator) => authenticator.user)
