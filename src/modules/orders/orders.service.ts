@@ -15,6 +15,7 @@ import { User } from '../users/entities/user.entity';
 import { MailProducer } from '../mail/mail.producer';
 import { MailOrderConfirmationPayload } from '../mail/interfaces/mail-payload.interface';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { PaymentStatus } from '@app/common/enums/payment-status.enum';
 
 @Injectable()
 export class OrdersService {
@@ -33,70 +34,57 @@ export class OrdersService {
     createOrderDto: CreateOrderDto,
     currentUserId: string,
   ): Promise<Order> {
+    // 1. Dùng hàm tách rời để check User
+    const user = await this.validateUserForOrder(currentUserId);
+
+    const items = createOrderDto.items || [];
+    if (items.length === 0)
+      throw new BadRequestException('Giỏ hàng không được để trống');
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
-
-    // Bắt đầu Transaction (Nếu lỗi ở bất kỳ khâu nào, mọi dữ liệu sẽ được quay ngược lại như cũ)
     await queryRunner.startTransaction();
 
     try {
       let totalAmount = 0;
       const orderItems: OrderItem[] = [];
-
-      // 1. FIX LỖI TYPESCRIPT VÀ BẮT LỖI MẢNG RỖNG
       const items = createOrderDto.items || [];
       if (items.length === 0) {
         throw new BadRequestException('Giỏ hàng không được để trống');
       }
-
-      // 2. TỐI ƯU NHẤT: Lấy TẤT CẢ sản phẩm trong 1 câu Query duy nhất (Tránh N+1 SELECT)
       const productIds = items.map((item) => item.productId);
       const products = await queryRunner.manager.find(Product, {
         where: { id: In(productIds) },
-        // select: ['id', 'name', 'price', 'stockQuantity'],
         select: {
           id: true,
           name: true,
           price: true,
           stockQuantity: true,
           finalPrice: true,
+          status: true,
+          isVerified: true,
         },
       });
 
-      // Tạo một Map trên RAM để tra cứu sản phẩm cực nhanh (O(1)) thay vì dùng mảng .find()
       const productMap = new Map(products.map((p) => [p.id, p]));
 
-      // 3. Xử lý từng sản phẩm trong giỏ hàng
       for (const item of items) {
-        // Lấy sản phẩm từ RAM ra (Cực nhanh, không đụng DB)
         const product = productMap.get(item.productId as string);
 
         if (!product) {
           throw new NotFoundException(
-            `Sản phẩm ${item.productId} không tồn tại`,
+            `Sản phẩm ${item.productId} không tồn tại.`,
           );
         }
 
-        if (product.stockQuantity === 0) {
-          throw new BadRequestException(
-            `Sản phẩm "${product.name}" hiện tại đã hết hàng.`,
-          );
-        }
+        // 2. Dùng hàm tách rời để check Sản phẩm
+        this.validateProductForOrder(
+          product,
+          item.productId as string,
+          item.quantity || 1,
+        );
 
-        if (!product.stockQuantity) {
-          throw new BadRequestException(
-            `Sản phẩm "${product.name}" hiện tại đang nhập hàng.`,
-          );
-        }
-
-        // Bắt lỗi sớm (Fast-fail) trên RAM trước khi bắt DB chạy Update
-        if (product.stockQuantity < (item.quantity || 1)) {
-          throw new BadRequestException(
-            `Sản phẩm "${product.name}" đã hết hàng hoặc không đủ số lượng.`,
-          );
-        }
-
-        // 4. ATOMIC UPDATE (Vẫn giữ nguyên để đảm bảo chống Race Condition)
+        // Xử lý trừ kho Atomic
         const updateResult = await queryRunner.manager
           .createQueryBuilder()
           .update(Product)
@@ -114,29 +102,26 @@ export class OrdersService {
           );
         }
 
-        // 5. Tạo Snapshot
         const unitPrice = (product.finalPrice || product.price || 0) as number;
         const totalPrice = unitPrice * (item.quantity || 1);
         totalAmount += totalPrice;
 
-        const orderItem = queryRunner.manager.create(OrderItem, {
-          product: { id: product.id },
-          productName: product.name,
-          quantity: item.quantity,
-          unitPrice,
-          totalPrice,
-          createBy: currentUserId,
-        });
-
-        orderItems.push(orderItem);
+        orderItems.push(
+          queryRunner.manager.create(OrderItem, {
+            product: { id: product.id },
+            productName: product.name,
+            quantity: item.quantity,
+            unitPrice,
+            totalPrice,
+            createBy: currentUserId,
+          }),
+        );
       }
 
-      // B4: Tính tổng tiền & Tạo mã đơn hàng (VD: ORD-170884-999)
-      const shippingFee = 30000; // Hardcode tạm 30k
+      const shippingFee = 30000;
       const finalAmount = totalAmount + shippingFee;
       const orderCode = `ORD-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`;
 
-      // B5: Lưu toàn bộ Order và OrderItems xuống DB
       const newOrder = queryRunner.manager.create(Order, {
         code: orderCode,
         user: { id: currentUserId },
@@ -154,30 +139,20 @@ export class OrdersService {
       });
 
       const savedOrder = await queryRunner.manager.save(newOrder);
-
-      // Mọi thứ hoàn hảo -> Xác nhận lưu vào Database thật
       await queryRunner.commitTransaction();
 
-      // 1. Lấy thông tin User để lấy email gửi thư
-      const user = await this.dataSource.manager.findOne(User, {
-        where: { id: currentUserId },
-      });
-
-      if (user && user.email) {
-        // Đẩy job gửi mail hóa đơn cho khách vào Redis Queue
-        this.sendMailOrder(createOrderDto, savedOrder, user, orderItems);
-      }
-
-      // 2. Bắn Socket báo cho Admin (Web quản trị sẽ reo chuông ngay lập tức)
+      this.sendMailOrder(createOrderDto, savedOrder, user, orderItems);
       this.notificationsGateway.notifyAdminNewOrder(savedOrder);
+      this.notificationsGateway.notifyUserOrderSuccess(
+        currentUserId,
+        savedOrder,
+      );
 
       return savedOrder;
     } catch (error) {
-      // Bất cứ lỗi gì (hết hàng, đứt cáp...) -> Xóa nháp, trả DB về như cũ
       await queryRunner.rollbackTransaction();
       throw error;
     } finally {
-      // Giải phóng bộ nhớ kết nối
       await queryRunner.release();
     }
   }
@@ -192,30 +167,29 @@ export class OrdersService {
   ) {
     const order = await this.orderRepo.findOne({
       where: { id },
-      relations: { items: { product: true } },
+      relations: { items: { product: true }, user: true },
     });
 
     if (!order) throw new NotFoundException('Đơn hàng không tồn tại');
 
-    const oldStatus = order.status;
-    const newStatus = updateDto.status;
+    this.validateOrderTransition(order, updateDto);
 
-    // Cập nhật trạng thái thanh toán nếu có truyền lên
-    if (updateDto.paymentStatus) {
-      order.paymentStatus = updateDto.paymentStatus;
+    const oldStatus = order.status as OrderStatus;
+    const newStatus = updateDto.status || oldStatus;
+
+    if (updateDto.paymentStatus) order.paymentStatus = updateDto.paymentStatus;
+    if (updateDto.noteAdmin) order.noteAdmin = updateDto.noteAdmin;
+    if (currentUserId) order.updateBy = currentUserId;
+
+    if (
+      oldStatus === newStatus &&
+      !updateDto.paymentStatus &&
+      !updateDto.noteAdmin
+    ) {
+      return order; // Không có gì thay đổi
     }
 
-    if (updateDto.noteAdmin) {
-      order.noteAdmin = updateDto.noteAdmin;
-    }
-
-    if (currentUserId) {
-      order.updateBy = currentUserId;
-    }
-
-    if (oldStatus === newStatus) return order;
-
-    // LOGIC HOÀN KHO: Nếu đơn bị HỦY, phải trả lại sách vào kho
+    // LOGIC HOÀN KHO: Nếu đơn bị HỦY
     if (
       newStatus === OrderStatus.CANCELLED &&
       oldStatus !== OrderStatus.CANCELLED
@@ -225,11 +199,9 @@ export class OrdersService {
       await queryRunner.startTransaction();
 
       try {
-        // Cộng lại số lượng tồn kho cho từng sản phẩm
         const items = order.items || [];
-        if (items.length === 0) {
+        if (items.length === 0)
           throw new BadRequestException('Giỏ hàng không tồn tại');
-        }
 
         for (const item of items) {
           if (item.product) {
@@ -249,38 +221,37 @@ export class OrdersService {
         const savedOrder = await queryRunner.manager.save(order);
         await queryRunner.commitTransaction();
 
-        // Bắn Socket báo cho khách biết đơn đã hoàn tất Hủy
+        // BỔ SUNG LOGIC 6: Truyền thêm oldStatus vào Socket
         if (order.user || currentUserId) {
           const userIdToNotify = order.user?.id || currentUserId;
           this.notificationsGateway.notifyUserOrderStatus(
             userIdToNotify,
             savedOrder,
+            oldStatus,
           );
         }
         return order;
       } catch (error) {
         await queryRunner.rollbackTransaction();
-        throw new BadRequestException(
-          'Lỗi khi hoàn kho, không thể hủy đơn. Vui lòng thử lại sau ít phút.',
-        );
+        throw new BadRequestException('Lỗi khi hoàn kho, không thể hủy đơn.');
       } finally {
         await queryRunner.release();
       }
     }
 
-    // Nếu không phải thao tác hủy đơn thì chỉ cần save status bình thường
     order.status = newStatus;
     const savedOrder = await this.orderRepo.save(order);
 
-    // Bắn Socket báo cho khách biết đơn đang được Gói/Giao
-    if (order.user || currentUserId) {
+    if (oldStatus !== newStatus) {
       const userIdToNotify = order.user?.id || currentUserId;
       this.notificationsGateway.notifyUserOrderStatus(
         userIdToNotify,
         savedOrder,
+        oldStatus,
       );
     }
-    return this.orderRepo.save(order);
+
+    return savedOrder;
   }
 
   async sendMailOrder(
@@ -331,7 +302,6 @@ export class OrdersService {
       where: whereCondition,
       relations: {
         user: true,
-        
       },
       order: orderCondition,
       skip,
@@ -405,8 +375,6 @@ export class OrdersService {
     return order;
   }
 
-  
-
   async cancelMyOrder(orderId: string, currentUserId: string) {
     const order = await this.orderRepo.findOne({
       where: { id: orderId, user: { id: currentUserId } }, // Đảm bảo đơn này của đúng User đó
@@ -428,5 +396,88 @@ export class OrdersService {
     updateDto.status = OrderStatus.CANCELLED;
 
     return this.updateStatus(order.id, updateDto, currentUserId);
+  }
+
+  // ==========================================
+  // HÀM BỔ TRỢ (PRIVATE METHODS) - CLEAN CODE
+  // ==========================================
+
+  private async validateUserForOrder(userId: string): Promise<User> {
+    const user = await this.dataSource.manager.findOne(User, {
+      where: { id: userId },
+    });
+
+    if (!user) throw new NotFoundException('Người dùng không tồn tại');
+    if (!user.isVerified) {
+      throw new BadRequestException(
+        'Vui lòng xác thực tài khoản (Verify Email) trước khi đặt hàng.',
+      );
+    }
+    return user;
+  }
+
+  private validateProductForOrder(
+    product: Product | undefined,
+    productId: string,
+    requestedQuantity: number,
+  ) {
+    if (!product) {
+      throw new NotFoundException(`Sản phẩm ${productId} không tồn tại.`);
+    }
+
+    if (product.isVerified === false) {
+      throw new BadRequestException(
+        `Sản phẩm "${product.name}" hiện chưa bán.`,
+      );
+    }
+
+    if (product.status !== 1) {
+      throw new BadRequestException(
+        `Sản phẩm "${product.name}" hiện tạm ngừng kinh doanh.`,
+      );
+    }
+    if (product.stockQuantity === 0) {
+      throw new BadRequestException(
+        `Sản phẩm "${product.name}" hiện tại đã hết hàng.`,
+      );
+    }
+    if (!product.stockQuantity) {
+      throw new BadRequestException(
+        `Sản phẩm "${product.name}" hiện tại đang nhập hàng.`,
+      );
+    }
+    if (product.stockQuantity < requestedQuantity) {
+      throw new BadRequestException(
+        `Sản phẩm "${product.name}" không đủ số lượng (Chỉ còn ${product.stockQuantity}).`,
+      );
+    }
+  }
+
+  private validateOrderTransition(
+    order: Order,
+    updateDto: UpdateOrderStatusDto,
+  ) {
+    const oldStatus = order.status;
+    const newStatus = updateDto.status || oldStatus;
+
+    // Chặn đổi khi đã Hủy
+    if (
+      oldStatus === OrderStatus.CANCELLED &&
+      newStatus !== OrderStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        'Không thể thay đổi trạng thái của đơn hàng đã bị hủy.',
+      );
+    }
+
+    // Chặn hoàn tác thanh toán
+    if (
+      order.paymentStatus === PaymentStatus.PAID &&
+      updateDto.paymentStatus === PaymentStatus.UNPAID
+    ) {
+      throw new BadRequestException(
+        'Không thể chuyển đơn hàng đã thanh toán về trạng thái chưa thanh toán.',
+      );
+    }
   }
 }

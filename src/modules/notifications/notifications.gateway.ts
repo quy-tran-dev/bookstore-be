@@ -40,7 +40,7 @@ export class NotificationsGateway
 
       // Đảm bảo JWT_SECRET khớp với bên AuthModule
       const payload = this.jwtService.verify(token, {
-        secret: process.env.JWT_ACCESS_SECRET || 'secretKey', 
+        secret: process.env.JWT_ACCESS_SECRET || 'secretKey',
       });
 
       const userId = payload.sub || payload.id;
@@ -75,10 +75,22 @@ export class NotificationsGateway
     });
   }
 
-  notifyUserOrderStatus(userId: string, order: any) {
+  // Báo cho User biết đơn hàng đã tạo thành công
+  notifyUserOrderSuccess(userId: string, order: any) {
+    this.server?.to(`user_${userId}`).emit('order_created_success', {
+      message: `Đặt hàng thành công! Mã đơn của bạn là ${order.code}. Chúng tôi đang chuẩn bị hàng.`,
+      orderCode: order.code,
+      totalAmount: order.finalAmount,
+    });
+  }
+
+  // Báo trạng thái chi tiết của đơn hàng
+  notifyUserOrderStatus(userId: string, order: any, oldStatus: string) {
     this.server?.to(`user_${userId}`).emit('order_status_updated', {
-      message: `Đơn hàng ${order.code} đã cập nhật trạng thái: ${order.status}`,
-      status: order.status,
+      message: `Đơn hàng ${order.code} đã chuyển trạng thái từ [${oldStatus}] sang [${order.status}].`,
+      orderCode: order.code,
+      oldStatus: oldStatus,
+      newStatus: order.status,
     });
   }
 }
