@@ -21,7 +21,7 @@ export class PublicAuthorsController {
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('keyword') keyword?: string,
   ) {
-    const whereCondition: any = { status: 1 }; // Chỉ lấy tác giả đang hoạt động
+    const whereCondition: any = { };
 
     if (keyword) {
       whereCondition.name = ILike(`%${keyword}%`);
@@ -30,7 +30,7 @@ export class PublicAuthorsController {
     return this.authorsService.findAllPaginated(page, limit, {
       where: whereCondition,
       order: { createdAt: 'DESC' },
-      // relations: { avatar: true } // Kéo theo ảnh đại diện nếu có
+      relations: { avatar: true } 
     });
   }
 

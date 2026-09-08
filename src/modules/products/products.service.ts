@@ -14,6 +14,7 @@ import { AiService } from '../ai/ai.service';
 import { Category } from '../categories/entities/category.entity';
 import { MediaFolder } from '@app/common/enums/media-folder.enum';
 import { StatusProduct } from '@app/common/enums/status-product.enum';
+import { ProductAlbum } from './entities/product-album.entity';
 
 @Injectable()
 export class ProductsService extends BaseService<Product> {
@@ -153,6 +154,27 @@ export class ProductsService extends BaseService<Product> {
     }
 
     // 3. Gộp và lưu
+    if (payload.bookDetail && entity.bookDetail) {
+      payload.bookDetail.id = entity.bookDetail.id;
+    }
+
+    if (payload.albums && entity.albums) {
+      payload.albums = payload.albums.map((newAlbum) => {
+        // Tìm xem ảnh này đã tồn tại trong DB chưa (dựa vào mediaId)
+        const existingAlbum = entity.albums?.find(
+          (oldAlbum) => oldAlbum.media?.id === newAlbum.media.id,
+        );
+
+        // Nếu ảnh đã có, gắn lại ID cũ để TypeORM hiểu là đang Update
+        if (existingAlbum) {
+          return { ...newAlbum, id: existingAlbum.id };
+        }
+
+        // Nếu là ảnh mới thêm vào, cứ giữ nguyên (TypeORM sẽ tự động Insert)
+        return Object.assign(new ProductAlbum(), newAlbum);
+      });
+    }
+
     Object.assign(entity, payload);
     await this.productRepository.save(entity);
 
@@ -366,7 +388,10 @@ export class ProductsService extends BaseService<Product> {
       where: whereCondition,
       relations,
     });
-    if (!product) throw new NotFoundException('Không tìm thấy sản phẩm này hoặc đã ngừng kinh doanh.');
+    if (!product)
+      throw new NotFoundException(
+        'Không tìm thấy sản phẩm này hoặc đã ngừng kinh doanh.',
+      );
     return product;
   }
 

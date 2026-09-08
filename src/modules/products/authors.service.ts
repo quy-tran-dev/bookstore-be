@@ -73,7 +73,7 @@ export class AuthorsService extends BaseService<Author> {
 
     const payload = {
       ...data,
-      avatar: data.mediaId ? { id: data.mediaId } : undefined,
+      avatar: data.mediaId ? { id: data.mediaId } : null,
     };
 
     // 2. Gọi hàm update của base service (hoặc repository)
