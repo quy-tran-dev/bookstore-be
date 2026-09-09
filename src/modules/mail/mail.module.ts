@@ -17,8 +17,8 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.ad
       useFactory: (config: ConfigService) => ({
         transport: {
           host: config.get('MAIL_HOST'),
-          port: config.get('MAIL_PORT'),
-          secure: false,
+          port: Number(config.get('MAIL_PORT')) || 465,
+          secure: config.get('MAIL_SECURE') === 'true' || Number(config.get('MAIL_PORT')) === 465,
           auth: {
             user: config.get('MAIL_USER'),
             pass: config.get('MAIL_PASSWORD'),

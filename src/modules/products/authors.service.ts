@@ -1,6 +1,8 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -12,15 +14,18 @@ import { SlugUtil } from '@app/common/utils/slug.util';
 import { UpdateAuthorDto } from './dto/admin-author.dto';
 import { Product } from './entities/product.entity';
 import { MediaFolder } from '@app/common/enums/media-folder.enum';
-
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 @Injectable()
 export class AuthorsService extends BaseService<Author> {
+  private readonly logger = new Logger(AuthorsService.name);
   constructor(
     @InjectRepository(Author)
     private readonly authorRepository: Repository<Author>,
     private readonly mediaService: MediaService,
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {
     super(authorRepository);
   }
@@ -49,9 +54,20 @@ export class AuthorsService extends BaseService<Author> {
       avatar: data.mediaId ? { id: data.mediaId } : null,
     };
 
-    const newAuthor = await super.create(payload, currentUserId);   
+    const newAuthor = await super.create(payload, currentUserId);  
 
-    return this.findOneAdmin(newAuthor.id);
+    const result = await this.findOneAdmin(newAuthor.id)
+     try {
+      (this.cacheManager.del(`/categories`),
+        this.logger.log(`Đã xóa cache khi mới tạo danh mục mới: ${result.id}`));
+    } catch (error) {
+      this.logger.error(
+        `Lỗi xóa cache danh mục khi mới tạo danh mục mới ${result.id}:`,
+        error,
+      );
+    }
+
+    return result;
   }
 
   async update(id: string, data: any, currentUserId?: string): Promise<Author> {
@@ -146,5 +162,18 @@ export class AuthorsService extends BaseService<Author> {
     });
     if (!author) throw new NotFoundException('Tác giả không tồn tại');
     return author;
+  }
+
+  private async clearAuthorCache(author: Author) {
+    try {
+      await Promise.all([
+        this.cacheManager.del(`/apis/v1/authors/${author.slug}`),
+        this.cacheManager.del(`/apis/v1/authors/id/${author.id}`),
+        this.cacheManager.del(`/apis/v1/authors`), 
+      ]);
+      this.logger.log(`Đã xóa cache cho tác giả: ${author.id}`);
+    } catch (error) {
+      this.logger.error(`Lỗi xóa cache tác giả ${author.id}:`, error);
+    }
   }
 }

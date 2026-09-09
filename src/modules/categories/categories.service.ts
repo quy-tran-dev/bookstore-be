@@ -1,8 +1,9 @@
-// src/modules/categories/categories.service.ts
 import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  Logger,
+  Inject,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, IsNull, Repository } from 'typeorm';
@@ -12,14 +13,18 @@ import { SlugUtil } from '@app/common/utils/slug.util';
 import { StatusCategory } from '@app/common/enums/status-category.enum';
 import { PublicCategoryDto } from './dto/public-category.dto';
 import { Product } from '../products/entities/product.entity';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 
 @Injectable()
 export class CategoriesService extends BaseService<Category> {
+  private readonly logger = new Logger(CategoriesService.name);
   constructor(
     @InjectRepository(Category)
     private readonly categoryRepository: Repository<Category>,
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {
     super(categoryRepository);
   }
@@ -117,6 +122,18 @@ export class CategoriesService extends BaseService<Category> {
       );
     }
 
+    try {
+       await Promise.all([
+        this.cacheManager.del(`/apis/v1/categories`),
+        this.cacheManager.del(`/apis/v1/categories/tree`),
+      ])
+    } catch (error) {
+      this.logger.error(
+        `Lỗi xóa cache danh mục khi mới tạo danh mục mới ${result.id}:`,
+        error,
+      );
+    }
+
     return result;
   }
 
@@ -148,7 +165,7 @@ export class CategoriesService extends BaseService<Category> {
     if (!result) {
       throw new NotFoundException('Lỗi khi truy xuất dữ liệu sau cập nhật');
     }
-
+    this.clearCategoryCache(result);
     return result;
   }
 
@@ -181,6 +198,7 @@ export class CategoriesService extends BaseService<Category> {
     });
 
     if (!categoryToKill) throw new NotFoundException('Danh mục không tồn tại');
+    this.clearCategoryCache(categoryToKill);
 
     const grandParentId = categoryToKill.parent
       ? categoryToKill.parent.id
@@ -336,5 +354,23 @@ export class CategoriesService extends BaseService<Category> {
     });
     if (!category) throw new NotFoundException('Không tìm thấy danh mục');
     return category;
+  }
+
+  private async clearCategoryCache(category: Category) {
+    try {
+      await Promise.all([
+        // 1. Xóa cache chi tiết (Slug & ID)
+        this.cacheManager.del(`/apis/v1/categories/${category.slug}`),
+        this.cacheManager.del(`/apis/v1/categories/id/${category.id}`),
+
+        // 2. Xóa luôn cache của API danh sách (không có query params)
+        // FE thường gọi API này để build thanh Menu (Header)
+        this.cacheManager.del(`/apis/v1/categories`),
+        this.cacheManager.del(`/apis/v1/categories/tree`),
+      ]);
+      this.logger.log(`Đã xóa cache cho danh mục: ${category.id}`);
+    } catch (error) {
+      this.logger.error(`Lỗi xóa cache danh mục ${category.id}:`, error);
+    }
   }
 }

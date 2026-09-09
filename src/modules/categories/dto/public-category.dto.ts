@@ -1,4 +1,12 @@
 import { Category } from '../entities/category.entity';
+import { Exclude, Expose, Transform, Type } from 'class-transformer';
+
+@Exclude()
+export class PublicCategoryResponseDto {
+  @Expose() id?: string;
+  @Expose() name?: string;
+  @Expose() slug?: string;
+}
 
 export class PublicCategoryDto {
   id: string;

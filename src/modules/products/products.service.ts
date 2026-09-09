@@ -2,6 +2,8 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  Inject,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, ILike, In, Repository } from 'typeorm';
@@ -15,9 +17,11 @@ import { Category } from '../categories/entities/category.entity';
 import { MediaFolder } from '@app/common/enums/media-folder.enum';
 import { StatusProduct } from '@app/common/enums/status-product.enum';
 import { ProductAlbum } from './entities/product-album.entity';
-
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 @Injectable()
 export class ProductsService extends BaseService<Product> {
+  private readonly logger = new Logger(ProductsService.name);
   constructor(
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
@@ -25,6 +29,7 @@ export class ProductsService extends BaseService<Product> {
     private readonly categoryRepository: Repository<Category>,
     private readonly mediaService: MediaService,
     private readonly aiService: AiService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {
     super(productRepository);
   }
@@ -86,6 +91,7 @@ export class ProductsService extends BaseService<Product> {
 
     // 3. Lưu DB
     const newProduct = await super.create(payload, currentUserId);
+
     return this.findOneWithDetails(newProduct.id);
   }
 
@@ -177,8 +183,11 @@ export class ProductsService extends BaseService<Product> {
 
     Object.assign(entity, payload);
     await this.productRepository.save(entity);
-
-    return this.findOneWithDetails(id);
+    const savedProduct = await this.findOneWithDetails(id);
+    
+    // Gọi hàm xóa Cache chạy ngầm (không cần await để tránh làm chậm luồng trả về cho Admin)
+    this.clearProductCache(savedProduct);
+    return savedProduct;
   }
 
   async hardDelete(id: string): Promise<void> {
@@ -203,7 +212,7 @@ export class ProductsService extends BaseService<Product> {
     // 3. Xóa sản phẩm khỏi DB.
     // LƯU Ý: Vì dùng .remove(), TypeORM sẽ tự động xóa các record trong book_details và product_albums nhờ Cascade.
     await this.productRepository.remove(product);
-
+    this.clearProductCache(product);
     // 4. Chạy vòng lặp chém bay các file vật lý khỏi ổ cứng
     // Dùng Promise.all để xóa nhiều file cùng lúc cho nhanh
     if (mediaIds.length > 0) {
@@ -373,7 +382,7 @@ export class ProductsService extends BaseService<Product> {
     const [data, total] = await queryBuilder.getManyAndCount();
 
     return {
-      data,
+      data: data,
       pagination: {
         total,
         page,
@@ -396,13 +405,16 @@ export class ProductsService extends BaseService<Product> {
   }
 
   async getProductsForCart(productIds: string[]) {
-    if (!productIds || productIds.length === 0) return [];
+    if (!productIds || productIds.length === 0) {
+      return { validProducts: [], unavailableIds: [] };
+    }
 
-    return this.repo.find({
+    const validProducts = await this.repo.find({
       where: {
         id: In(productIds),
         status: StatusProduct.ACTIVE,
         isVerified: true,
+        // TypeORM mặc định bỏ qua các record đã bị soft-delete (deletedAt != null)
       },
       select: {
         id: true,
@@ -417,6 +429,17 @@ export class ProductsService extends BaseService<Product> {
         albums: { media: true },
       },
     });
+
+    // Gom ID của các sản phẩm hợp lệ
+    const validIds = validProducts.map((p) => p.id);
+
+    // Lọc ra các ID mà FE gửi lên nhưng không có trong validIds (bị xóa, ẩn, v.v.)
+    const unavailableIds = productIds.filter((id) => !validIds.includes(id));
+
+    return {
+      validProducts: validProducts,
+      unavailableIds: unavailableIds,
+    };
   }
 
   async searchHybridA(searchQuery: string, limit: number = 10) {
@@ -628,5 +651,21 @@ export class ProductsService extends BaseService<Product> {
       .filter(Boolean); // Lọc bỏ null
 
     return formattedProducts;
+  }
+
+  // ==========================================
+  // HÀM BỔ TRỢ: XÓA CACHE SẢN PHẨM
+  // ==========================================
+  private async clearProductCache(product: Product) {
+    try {
+      await Promise.all([
+        this.cacheManager.del(`/apis/v1/products/${product.slug}`),
+        this.cacheManager.del(`/apis/v1/products/id/${product.id}`),
+      ]);
+      // Bắn log ở Service để sau này debug dễ dàng
+      this.logger.log(`Đã xóa cache cho sản phẩm: ${product.id}`);
+    } catch (error) {
+      this.logger.error(`Lỗi khi xóa cache sản phẩm ${product.id}:`, error);
+    }
   }
 }
