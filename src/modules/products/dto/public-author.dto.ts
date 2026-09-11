@@ -6,7 +6,10 @@ export class PublicAuthorResponseDto {
   @Expose() name?: string;
   @Expose() slug?: string;
   @Expose() describe?: string;
-  @Expose()
+
+  // Đổi tên key xuất ra thành 'avatarUrl'
+  // Dùng 'obj.avatar' để chọc thẳng vào relation avatar của bảng Author
+  @Expose({ name: 'avatarUrl' })
   @Transform(({ obj }) => obj.avatar?.fileUrl || null)
-  avatarUrl?: string;
+  avatar: any; 
 }

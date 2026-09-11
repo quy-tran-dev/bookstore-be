@@ -108,6 +108,7 @@ export const seedProducts = async (
   // ==========================================
   // 3. SEED PRODUCTS
   // ==========================================
+  const existingProductSlugs = new Set<string>();
   console.log(
     'Đang tạo Products (Đang trích xuất từ khóa và tạo Vector, vui lòng đợi)...',
   );
@@ -127,9 +128,18 @@ export const seedProducts = async (
     const costPrice = Math.floor(prod.price * 0.6);
     const discountPrice = Math.floor(prod.price * 0.85);
 
+    // Kiểm tra xem slug này đã tồn tại trong DB hoặc đã được xử lý trong vòng lặp này chưa
+    const productSlug = SlugUtil.generate(prod.name);
+    if (existingProductSlugs.has(productSlug)) {
+      console.log(
+        `⏭ Bỏ qua [${i + 1}/${productData.length}]: "${prod.name}" (Đã tồn tại)`,
+      );
+      continue;
+    }
+
     const payload = {
       name: prod.name,
-      slug: SlugUtil.generate(prod.name),
+      slug: productSlug,
       shortDescribe: prod.description,
       cost: costPrice,
       price: prod.price,
@@ -165,6 +175,9 @@ export const seedProducts = async (
     }
 
     await productRepo.save(productRepo.create(payload as any));
+
+    existingProductSlugs.add(productSlug);
+
     console.log(
       ` Đã xử lý xong [${i + 1}/${productData.length}]: ${prod.name}`,
     );

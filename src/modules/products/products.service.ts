@@ -247,7 +247,7 @@ export class ProductsService extends BaseService<Product> {
       relations: {
         albums: { media: true }, // Load mảng albums kèm info ảnh
         categories: true,
-        authors: true,
+        authors: { avatar: true },
         bookDetail: true,
       },
     });
@@ -437,7 +437,7 @@ export class ProductsService extends BaseService<Product> {
     const unavailableIds = productIds.filter((id) => !validIds.includes(id));
 
     return {
-      validProducts: validProducts,
+      validProducts:  validProducts ? validProducts.map(p => this.mapProductToPublicResponse(p)) : [],
       unavailableIds: unavailableIds,
     };
   }
@@ -492,7 +492,7 @@ export class ProductsService extends BaseService<Product> {
       where: { id: In(productIds) },
       relations: {
         categories: true,
-        authors: true,
+        authors: { avatar: true },
         albums: { media: true },
         bookDetail: true,
       },
@@ -527,7 +527,7 @@ export class ProductsService extends BaseService<Product> {
           soldCount: p.soldCount,
           categories:
             p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
-          authors: p.authors?.map((a) => ({ id: a.id, name: a.name })) || [],
+          authors: p.authors?.map((a) => ({ id: a.id, name: a.name, slug: a.slug, describe: a.describe, avatarUrl: a.avatar?.fileUrl })) || [],
           albums:
             p.albums
               ?.map((al) => ({
@@ -595,7 +595,7 @@ export class ProductsService extends BaseService<Product> {
       where: { id: In(productIds) },
       relations: {
         categories: true,
-        authors: true,
+        authors: { avatar: true },
         albums: { media: true }, // Kéo media từ albums
         bookDetail: true,
       },
@@ -632,7 +632,7 @@ export class ProductsService extends BaseService<Product> {
           // Ép dữ liệu relations gọn gàng lại cho FE dễ dùng
           categories:
             p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
-          authors: p.authors?.map((a) => ({ id: a.id, name: a.name })) || [],
+          authors: p.authors?.map((a) => ({ id: a.id, name: a.name, slug: a.slug, describe: a.describe, avatarUrl: a.avatar?.fileUrl })) || [],
           // Lấy danh sách ảnh và đẩy ảnh isDefault lên đầu tiên
           albums:
             p.albums
@@ -667,5 +667,51 @@ export class ProductsService extends BaseService<Product> {
     } catch (error) {
       this.logger.error(`Lỗi khi xóa cache sản phẩm ${product.id}:`, error);
     }
+  }
+
+  public mapProductToPublicResponse(product: Product) {
+    if (!product) return null;
+
+    return {
+      id: product.id,
+      name: product.name,
+      slug: product.slug,
+      shortDescribe: product.shortDescribe,
+      price: product.price,
+      finalPrice: product.finalPrice,
+      stockQuantity: product.stockQuantity,
+      soldCount: product.soldCount,
+      createdAt: product.createdAt,
+
+      categories: product.categories?.map((c) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+      })) || [],
+
+      authors: product.authors?.map((a) => ({
+        id: a.id,
+        name: a.name,
+        slug: a.slug,
+        describe: a.describe,
+        avatarUrl: a.avatar?.fileUrl || null,
+      })) || [],
+
+      albums: product.albums?.map((al) => ({
+        displayOrder: al.displayOrder,
+        imageUrl: al.media?.fileUrl || null,
+        altText: al.media?.altText || null,
+      })).sort((a, b) => Number(a.displayOrder) - Number(b.displayOrder)) || [],
+
+      bookDetail: product.bookDetail ? {
+        title: product.bookDetail.title,
+        describe: product.bookDetail.describe,
+        publisher: product.bookDetail.publisher,
+        publishYear: product.bookDetail.publishYear,
+        language: product.bookDetail.language,
+        format: product.bookDetail.format,
+        pageCount: product.bookDetail.pageCount,
+      } : null,
+    };
   }
 }

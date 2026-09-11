@@ -56,3 +56,8 @@ export class PublicProductDetailResponseDto extends PublicProductListResponseDto
   @Type(() => PublicBookDetailResponseDto)
   bookDetail?: PublicBookDetailResponseDto;
 }
+
+@Exclude()
+export class PublicProductSearchResponseDto extends PublicProductDetailResponseDto {
+   @Expose() searchScore?: number;
+}

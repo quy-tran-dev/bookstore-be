@@ -11,8 +11,6 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { ILike } from 'typeorm';
-import { plainToInstance } from 'class-transformer';
-import { PublicAuthorResponseDto } from '@app/modules/products/dto/public-author.dto';
 
 @Controller('authors')
 @UseInterceptors(CacheInterceptor)
@@ -20,7 +18,7 @@ export class PublicAuthorsController {
   constructor(private readonly authorsService: AuthorsService) {}
 
   @Get()
-  @CacheTTL(1800000)
+  @CacheTTL(1800000) 
   async findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
@@ -40,7 +38,9 @@ export class PublicAuthorsController {
 
     return {
       ...result,
-      data: plainToInstance(PublicAuthorResponseDto, result?.data || []),
+      data: result?.data 
+        ? result.data.map((author) => this.authorsService.mapAuthorToPublicResponse(author))
+        : [],
     };
   }
 
@@ -53,7 +53,7 @@ export class PublicAuthorsController {
 
     if (!author) throw new NotFoundException('Không tìm thấy tác giả');
     
-    return plainToInstance(PublicAuthorResponseDto, author);
+    return this.authorsService.mapAuthorToPublicResponse(author);
   }
 
   @Get('id/:id')
@@ -65,6 +65,6 @@ export class PublicAuthorsController {
 
     if (!author) throw new NotFoundException('Không tìm thấy tác giả');
 
-    return plainToInstance(PublicAuthorResponseDto, author);
+    return this.authorsService.mapAuthorToPublicResponse(author);
   }
 }

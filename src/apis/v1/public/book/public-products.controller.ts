@@ -12,11 +12,6 @@ import {
 import { ProductsService } from '@app/modules/products/products.service';
 import { StatusProduct } from '@app/common/enums/status-product.enum';
 import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
-import { plainToInstance } from 'class-transformer';
-import {
-  PublicProductDetailResponseDto,
-  PublicProductListResponseDto,
-} from '@app/modules/products/dto/public-product.dto';
 
 @Controller('products')
 @UseInterceptors(CacheInterceptor)
@@ -39,7 +34,7 @@ export class PublicProductsController {
       data: {
         keyword: keyword,
         // Ép kiểu mảng kết quả về DTO dạng List
-        results: plainToInstance(PublicProductListResponseDto, results),
+        results: results,
         totalRetrieved: results.length,
       },
     };
@@ -60,14 +55,14 @@ export class PublicProductsController {
       message: 'Tìm kiếm thành công',
       data: {
         keyword: keyword,
-        results: plainToInstance(PublicProductListResponseDto, results),
+        results: results,
         totalRetrieved: results.length,
       },
     };
   }
 
   @Get()
-  @CacheTTL(300000)
+  // @CacheTTL(300000)
   async findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
@@ -94,7 +89,9 @@ export class PublicProductsController {
     // Giả sử hàm paginate trả về object có thuộc tính 'data' chứa mảng records
     return {
       ...result,
-      data: plainToInstance(PublicProductListResponseDto, result?.data || []),
+      data: result.data.map((product) =>
+        this.productsService.mapProductToPublicResponse(product),
+      ),
     };
   }
 
@@ -114,11 +111,7 @@ export class PublicProductsController {
           ? 'Một số sản phẩm trong giỏ hàng không còn tồn tại hoặc đã ngừng kinh doanh'
           : 'Lấy dữ liệu giỏ hàng thành công',
       data: {
-        validProducts: plainToInstance(
-          PublicProductListResponseDto,
-          result.validProducts,
-        ),
-
+        validProducts: result.validProducts,
         unavailableIds: result.unavailableIds,
       },
     };
@@ -130,19 +123,17 @@ export class PublicProductsController {
     const product = await this.productsService.findOneBy(
       { slug: slug, status: StatusProduct.ACTIVE, isVerified: true },
       {
-        relations: {
-          categories: true,
-          authors: true,
-          albums: { media: true },
-          bookDetail: true,
-        },
+        categories: true,
+        authors: { avatar: true },
+        albums: { media: true },
+        bookDetail: true,
       },
     );
 
     if (!product) throw new NotFoundException('Không tìm thấy sản phẩm này');
 
     // Ép sang DTO Chi tiết (Full thông tin)
-    return plainToInstance(PublicProductDetailResponseDto, product);
+    return this.productsService.mapProductToPublicResponse(product);
   }
 
   @Get('id/:id')
@@ -151,17 +142,15 @@ export class PublicProductsController {
     const product = await this.productsService.findOneBy(
       { id: id, status: StatusProduct.ACTIVE, isVerified: true },
       {
-        relations: {
-          categories: true,
-          authors: true,
-          albums: { media: true },
-          bookDetail: true,
-        },
+        categories: true,
+        authors: { avatar: true },
+        albums: { media: true },
+        bookDetail: true,
       },
     );
 
     if (!product) throw new NotFoundException('Không tìm thấy sản phẩm này');
 
-    return plainToInstance(PublicProductDetailResponseDto, product);
+    return this.productsService.mapProductToPublicResponse(product);
   }
 }

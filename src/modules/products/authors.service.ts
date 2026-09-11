@@ -11,14 +11,15 @@ import { BaseService } from '@app/common/base/base.service';
 import { Author } from './entities/author.entity';
 import { MediaService } from '../media/media.service';
 import { SlugUtil } from '@app/common/utils/slug.util';
-import { UpdateAuthorDto } from './dto/admin-author.dto';
 import { Product } from './entities/product.entity';
 import { MediaFolder } from '@app/common/enums/media-folder.enum';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
+
 @Injectable()
 export class AuthorsService extends BaseService<Author> {
   private readonly logger = new Logger(AuthorsService.name);
+
   constructor(
     @InjectRepository(Author)
     private readonly authorRepository: Repository<Author>,
@@ -31,15 +32,12 @@ export class AuthorsService extends BaseService<Author> {
   }
 
   async create(data: any, currentUserId?: string): Promise<Author> {
-    // 1. Tạo slug từ tên tác giả (VD: "To Huyen Dong" -> "to-huyen-dong")
     const slug = SlugUtil.generate(data.name);
 
     if (!data.slug && data.name) data.slug = SlugUtil.generate(data.name);
     if (data.slug) await this.validateSlugDuplication(data.slug);
 
-    // 2. Chuyển file ảnh vật lý vào đúng thư mục
     if (data.mediaId) {
-      // Sẽ move ảnh vào folder: /uploads/authors/to-huyen-dong
       await this.mediaService.moveMediaToSubfolder(
         data.mediaId,
         MediaFolder.AUTHORS,
@@ -47,7 +45,6 @@ export class AuthorsService extends BaseService<Author> {
       );
     }
 
-    // 3. Chuẩn bị payload để lưu
     const payload = {
       ...data,
       slug,
@@ -55,23 +52,15 @@ export class AuthorsService extends BaseService<Author> {
     };
 
     const newAuthor = await super.create(payload, currentUserId);  
-
-    const result = await this.findOneAdmin(newAuthor.id)
-     try {
-      (this.cacheManager.del(`/categories`),
-        this.logger.log(`Đã xóa cache khi mới tạo danh mục mới: ${result.id}`));
-    } catch (error) {
-      this.logger.error(
-        `Lỗi xóa cache danh mục khi mới tạo danh mục mới ${result.id}:`,
-        error,
-      );
-    }
+    const result = await this.findOneAdmin(newAuthor.id);
+    
+    // Gọi hàm clear cache chuẩn
+    await this.clearAuthorCache(result);
 
     return result;
   }
 
   async update(id: string, data: any, currentUserId?: string): Promise<Author> {
-    // 1. Xử lý logic slug và media như cũ
     if (!data.slug && data.name) {
       data.slug = SlugUtil.generate(data.name);
     }
@@ -92,10 +81,13 @@ export class AuthorsService extends BaseService<Author> {
       avatar: data.mediaId ? { id: data.mediaId } : null,
     };
 
-    // 2. Gọi hàm update của base service (hoặc repository)
     await super.update(id, payload, currentUserId);
+    const updatedAuthor = await this.findOneAdmin(id);
+    
+    // Xóa cache sau khi update
+    await this.clearAuthorCache(updatedAuthor);
 
-    return this.findOneAdmin(id);
+    return updatedAuthor;
   }
 
   async findOneAdmin(id: string): Promise<Author> {
@@ -109,7 +101,12 @@ export class AuthorsService extends BaseService<Author> {
 
   async softDelete(id: string, currentUserId?: string): Promise<void> {
     await this.checkProductRelation(id);
+    
+    const author = await this.findOneAdmin(id);
+    
     await super.softDelete(id, currentUserId);
+    
+    await this.clearAuthorCache(author);
   }
 
   async hardDelete(id: string): Promise<void> {
@@ -130,6 +127,8 @@ export class AuthorsService extends BaseService<Author> {
     if (avatarMediaId) {
       await this.mediaService.hardDelete(avatarMediaId);
     }
+    
+    await this.clearAuthorCache(author);
   }
 
   private async checkProductRelation(authorId: string) {
@@ -155,7 +154,6 @@ export class AuthorsService extends BaseService<Author> {
   }
 
   async findOneBy(whereCondition: any = {}): Promise<Author> {
-
     const author = await this.authorRepository.findOne({
       where: whereCondition,
       relations: { avatar: true },
@@ -166,6 +164,8 @@ export class AuthorsService extends BaseService<Author> {
 
   private async clearAuthorCache(author: Author) {
     try {
+      // Dùng Redis thì key cache cần chính xác. 
+      // Xóa chi tiết theo slug, theo id và danh sách.
       await Promise.all([
         this.cacheManager.del(`/apis/v1/authors/${author.slug}`),
         this.cacheManager.del(`/apis/v1/authors/id/${author.id}`),
@@ -175,5 +175,17 @@ export class AuthorsService extends BaseService<Author> {
     } catch (error) {
       this.logger.error(`Lỗi xóa cache tác giả ${author.id}:`, error);
     }
+  }
+
+  public mapAuthorToPublicResponse(author: any) { 
+    if (!author) return null;
+
+    return {
+      id: author.id,
+      name: author.name,
+      slug: author.slug,
+      describe: author.describe,
+      avatarUrl: author.avatar?.fileUrl || null, 
+    };
   }
 }
