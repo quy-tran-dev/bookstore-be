@@ -7,6 +7,7 @@ import {
   Req,
   UseGuards,
   Request,
+  BadRequestException,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import type { Response } from 'express';
@@ -18,12 +19,14 @@ import { JwtRefreshGuard } from '@app/common/guards/jwt-refresh.guard';
 import { JwtAuthGuard } from '@app/common/guards/jwt-auth.guard';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { DiscordService } from '../discord/discord.service';
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
+    private readonly discordService: DiscordService, // Inject Discord vào Controller
   ) {}
 
   @Post('register')
@@ -31,9 +34,16 @@ export class AuthController {
     @Body() dto: RegisterDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { accessToken, refreshToken } =
-      await this.authService.registerWithPassword(dto);
+    const { accessToken, refreshToken } = await this.authService.registerWithPassword(dto);
     this.setRefreshTokenCookie(res, refreshToken);
+    
+    // Ghi Log Discord tại Controller
+    this.discordService.sendLog(
+      'INFO',
+      `Khách hàng mới đăng ký tài khoản: **${dto.email}**`,
+      'AuthController',
+    );
+
     return { accessToken };
   }
 
@@ -42,17 +52,40 @@ export class AuthController {
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { accessToken, refreshToken } =
-      await this.authService.loginWithPassword(dto);
+    const { accessToken, refreshToken } = await this.authService.loginWithPassword(dto);
     this.setRefreshTokenCookie(res, refreshToken);
     return { accessToken };
   }
 
+  // ==========================================
+  // XÁC THỰC EMAIL
+  // ==========================================
+  @Post('verify-email')
+  async verifyEmail(@Body('token') token: string) {
+    if (!token) throw new BadRequestException('Thiếu mã xác thực (token)');
+    const result = await this.authService.verifyEmail(token);
+    
+    this.discordService.sendLog(
+      'INFO',
+      `Tài khoản **${result.email}** đã xác thực email thành công.`,
+      'AuthController',
+    );
+
+    return { success: result.success, message: result.message };
+  }
+
+  @Post('resend-verification')
+  async resendVerification(@Body('email') email: string) {
+    if (!email) throw new BadRequestException('Email không được để trống');
+    return this.authService.resendVerificationToken(email);
+  }
+
+  // ==========================================
+  // GOOGLE AUTH
+  // ==========================================
   @Get('google')
   @UseGuards(AuthGuard('google'))
-  async googleAuth(@Req() req: Request) {
-    // Để trống. Passport tự động intercept và redirect tới web Google.
-  }
+  async googleAuth(@Req() req: Request) {}
 
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
@@ -60,66 +93,50 @@ export class AuthController {
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { accessToken, refreshToken } = await this.authService.googleLogin(
-      req.user,
-    );
+    const { accessToken, refreshToken, isNewUser, email } = await this.authService.googleLogin(req.user);
     this.setRefreshTokenCookie(res, refreshToken);
 
-    // Lấy link Frontend từ file .env, không hardcode localhost:3000 nữa
+    // Chỉ bắn log nếu đây là User mới tinh
+    if (isNewUser) {
+      this.discordService.sendLog(
+        'INFO',
+        `Khách hàng mới đăng nhập qua Google: **${email}**`,
+        'AuthController',
+      );
+    }
+
     const frontendUrl = this.configService.get<string>('FRONTEND_URL');
     res.redirect(`${frontendUrl}/auth/success?token=${accessToken}`);
   }
 
-  // Đăng xuất
-  // ==========================================
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   async logout(
     @Request() req: any,
-    @Res({ passthrough: true }) res: Response, // Thêm Res
+    @Res({ passthrough: true }) res: Response,
   ) {
     const userId = req.user.id;
     await this.authService.logout(userId);
-    
-    // Xóa cookie chứa refresh_token ở trình duyệt
     res.clearCookie('refresh_token');
-    
     return { message: 'Đăng xuất thành công' };
   }
 
-  // Hàm tiện ích set Cookie chuẩn bảo mật
-  private setRefreshTokenCookie(res: Response, token: string) {
-    res.cookie('refresh_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-  }
-
+  // ==========================================
+  // WEBAUTHN & QUÊN MẬT KHẨU
+  // ==========================================
   @Post('webauthn/login-verify')
   async verifyLogin(
     @Body() body: any,
     @Res({ passthrough: true }) res: Response,
   ) {
     const { email, authResponse, challenge } = body;
-
-    // Gọi hàm verify sinh trắc học
     const { accessToken, refreshToken } = await this.authService.verifyLogin(
       email,
       authResponse,
       challenge,
     );
 
-    // BẢO MẬT CHỐNG XSS: Đính kèm Refresh Token vào HTTP-Only Cookie
-    res.cookie('refresh_token', refreshToken, {
-      httpOnly: true, // Chặn JavaScript (Document.cookie) đọc token này
-      secure: process.env.NODE_ENV === 'production', // Chỉ gửi qua HTTPS ở Production
-      sameSite: 'strict', // Chống CSRF Attack
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 ngày
-    });
-
-    // Chỉ trả Access Token về cho Frontend lưu vô Memory
+    this.setRefreshTokenCookie(res, refreshToken);
     return { accessToken };
   }
 
@@ -127,18 +144,16 @@ export class AuthController {
   @Post('refresh')
   async refreshTokens(
     @Request() req: any,
-    @Res({ passthrough: true }) res: Response, // Thêm Res vào đây
+    @Res({ passthrough: true }) res: Response,
   ) {
     const userId = req.user.id;
     const refreshToken = req.user.refreshToken;
 
     const tokens = await this.authService.refreshTokens(userId, refreshToken);
-
-    // Bắt buộc phải set lại Cookie mới để trình duyệt cập nhật
     this.setRefreshTokenCookie(res, tokens.refreshToken);
-
     return { accessToken: tokens.accessToken };
   }
+
   @Post('forgot-password')
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
     return this.authService.forgotPassword(dto);
@@ -146,6 +161,27 @@ export class AuthController {
 
   @Post('reset-password')
   async resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.authService.resetPassword(dto);
+    const result = await this.authService.resetPassword(dto);
+    
+    // Ghi Log Discord sau khi đổi pass thành công
+    this.discordService.sendLog(
+      'INFO',
+      `Người dùng **${result.email}** đã đặt lại mật khẩu thành công.`,
+      'AuthController',
+    );
+
+    return { success: result.success, message: result.message };
+  }
+
+  // ==========================================
+  // HÀM TIỆN ÍCH SET COOKIE
+  // ==========================================
+  private setRefreshTokenCookie(res: Response, token: string) {
+    res.cookie('refresh_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
   }
 }
