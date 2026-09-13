@@ -18,6 +18,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { CacheModule } from '@nestjs/cache-manager';
 
 @Module({
   imports: [
@@ -48,6 +49,11 @@ import { OrdersModule } from './modules/orders/orders.module';
         limit: 30,
       },
     ]),
+    CacheModule.register({
+      isGlobal: true,   
+      ttl: 60000,        // Thời gian sống mặc định: 60 giây (bản NestJS 10 tính bằng ms)
+      max: 500,         
+    }),
     DiscordModule,
     MailModule,
     AuthModule,

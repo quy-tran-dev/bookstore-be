@@ -2,6 +2,8 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  Inject,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, ILike, In, Repository } from 'typeorm';
@@ -13,9 +15,13 @@ import { MediaService } from '../media/media.service';
 import { AiService } from '../ai/ai.service';
 import { Category } from '../categories/entities/category.entity';
 import { MediaFolder } from '@app/common/enums/media-folder.enum';
-
+import { StatusProduct } from '@app/common/enums/status-product.enum';
+import { ProductAlbum } from './entities/product-album.entity';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 @Injectable()
 export class ProductsService extends BaseService<Product> {
+  private readonly logger = new Logger(ProductsService.name);
   constructor(
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
@@ -23,6 +29,7 @@ export class ProductsService extends BaseService<Product> {
     private readonly categoryRepository: Repository<Category>,
     private readonly mediaService: MediaService,
     private readonly aiService: AiService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {
     super(productRepository);
   }
@@ -84,6 +91,7 @@ export class ProductsService extends BaseService<Product> {
 
     // 3. Lưu DB
     const newProduct = await super.create(payload, currentUserId);
+
     return this.findOneWithDetails(newProduct.id);
   }
 
@@ -99,7 +107,11 @@ export class ProductsService extends BaseService<Product> {
 
     const entity = await this.productRepository.findOne({
       where: { id },
-      relations: { bookDetail: true, categories: true },
+      relations: {
+        bookDetail: true,
+        categories: true,
+        authors: true,
+      },
     });
 
     if (!entity) throw new NotFoundException('Không tìm thấy sản phẩm');
@@ -148,10 +160,34 @@ export class ProductsService extends BaseService<Product> {
     }
 
     // 3. Gộp và lưu
-    const updatedEntity = this.productRepository.merge(entity, payload);
-    await this.productRepository.save(updatedEntity);
+    if (payload.bookDetail && entity.bookDetail) {
+      payload.bookDetail.id = entity.bookDetail.id;
+    }
 
-    return this.findOneWithDetails(id);
+    if (payload.albums && entity.albums) {
+      payload.albums = payload.albums.map((newAlbum) => {
+        // Tìm xem ảnh này đã tồn tại trong DB chưa (dựa vào mediaId)
+        const existingAlbum = entity.albums?.find(
+          (oldAlbum) => oldAlbum.media?.id === newAlbum.media.id,
+        );
+
+        // Nếu ảnh đã có, gắn lại ID cũ để TypeORM hiểu là đang Update
+        if (existingAlbum) {
+          return { ...newAlbum, id: existingAlbum.id };
+        }
+
+        // Nếu là ảnh mới thêm vào, cứ giữ nguyên (TypeORM sẽ tự động Insert)
+        return Object.assign(new ProductAlbum(), newAlbum);
+      });
+    }
+
+    Object.assign(entity, payload);
+    await this.productRepository.save(entity);
+    const savedProduct = await this.findOneWithDetails(id);
+    
+    // Gọi hàm xóa Cache chạy ngầm (không cần await để tránh làm chậm luồng trả về cho Admin)
+    this.clearProductCache(savedProduct);
+    return savedProduct;
   }
 
   async hardDelete(id: string): Promise<void> {
@@ -176,7 +212,7 @@ export class ProductsService extends BaseService<Product> {
     // 3. Xóa sản phẩm khỏi DB.
     // LƯU Ý: Vì dùng .remove(), TypeORM sẽ tự động xóa các record trong book_details và product_albums nhờ Cascade.
     await this.productRepository.remove(product);
-
+    this.clearProductCache(product);
     // 4. Chạy vòng lặp chém bay các file vật lý khỏi ổ cứng
     // Dùng Promise.all để xóa nhiều file cùng lúc cho nhanh
     if (mediaIds.length > 0) {
@@ -211,7 +247,7 @@ export class ProductsService extends BaseService<Product> {
       relations: {
         albums: { media: true }, // Load mảng albums kèm info ảnh
         categories: true,
-        authors: true,
+        authors: { avatar: true },
         bookDetail: true,
       },
     });
@@ -279,49 +315,131 @@ export class ProductsService extends BaseService<Product> {
     const { keyword, categoryId, authorId, status, isVerified, orderBy, sort } =
       filters;
 
-    // 1. Khởi tạo object điều kiện lọc (Where)
-    const whereCondition: any = {};
+    // Chuẩn hóa phân trang
+    page = Math.max(1, page);
+    limit = Math.max(1, limit);
+    const skip = (page - 1) * limit;
 
+    // Khởi tạo QueryBuilder
+    const queryBuilder = this.repo
+      .createQueryBuilder('product')
+      // Lấy data quan hệ trả về cho Client (Giữ nguyên toàn bộ danh sách)
+      .leftJoinAndSelect('product.categories', 'categories')
+      .leftJoinAndSelect('product.authors', 'authors')
+      .leftJoinAndSelect('product.albums', 'albums')
+      .leftJoinAndSelect('albums.media', 'media');
+
+    // 1. Lọc theo Keyword (Dùng ILIKE để không phân biệt hoa thường)
     if (keyword) {
-      whereCondition.name = ILike(`%${keyword}%`);
+      queryBuilder.andWhere('product.name ILIKE :keyword', {
+        keyword: `%${keyword}%`,
+      });
     }
 
-    if (categoryId) {
-      whereCondition.categories = { id: categoryId };
-    }
-
-    if (authorId) {
-      whereCondition.authors = { id: authorId };
-    }
-
+    // 2. Lọc theo các trường cơ bản
     if (status !== undefined) {
-      whereCondition.status = parseInt(status, 10);
+      queryBuilder.andWhere('product.status = :status', {
+        status: parseInt(status, 10),
+      });
     }
 
     if (isVerified !== undefined) {
-      whereCondition.isVerified = isVerified === 'true';
+      queryBuilder.andWhere('product.isVerified = :isVerified', {
+        isVerified: isVerified === 'true',
+      });
     }
 
-    // 2. Khởi tạo object sắp xếp (Order)
-    const orderCondition: any = {};
+    if (categoryId) {
+      queryBuilder.innerJoin(
+        'product.categories',
+        'filterCategory',
+        'filterCategory.id = :categoryId',
+        { categoryId },
+      );
+    }
+
+    if (authorId) {
+      queryBuilder.innerJoin(
+        'product.authors',
+        'filterAuthor',
+        'filterAuthor.id = :authorId',
+        { authorId },
+      );
+    }
+
+    // 4. Khởi tạo object sắp xếp (Order)
     if (orderBy) {
-      orderCondition[orderBy] = sort || 'DESC';
+      // Bắt buộc phải có tiền tố "product." để tránh lỗi trùng tên cột
+      queryBuilder.orderBy(`product.${orderBy}`, sort || 'DESC');
     } else {
-      orderCondition.createdAt = 'DESC';
+      queryBuilder.orderBy('product.createdAt', 'DESC');
     }
 
-    // 3. Đẩy vào Service
-    return this.findAllPaginated(page, limit, {
+    // 5. Phân trang & Thực thi (Vượt qua BaseService)
+    queryBuilder.skip(skip).take(limit);
+
+    // getManyAndCount giải quyết triệt để lỗi phân trang sai số lượng khi có JOIN
+    const [data, total] = await queryBuilder.getManyAndCount();
+
+    return {
+      data: data,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async findOneBy(whereCondition: any = {}, relations?: any) {
+    const product = await this.repo.findOne({
       where: whereCondition,
-      order: orderCondition,
+      relations,
+    });
+    if (!product)
+      throw new NotFoundException(
+        'Không tìm thấy sản phẩm này hoặc đã ngừng kinh doanh.',
+      );
+    return product;
+  }
+
+  async getProductsForCart(productIds: string[]) {
+    if (!productIds || productIds.length === 0) {
+      return { validProducts: [], unavailableIds: [] };
+    }
+
+    const validProducts = await this.repo.find({
+      where: {
+        id: In(productIds),
+        status: StatusProduct.ACTIVE,
+        isVerified: true,
+        // TypeORM mặc định bỏ qua các record đã bị soft-delete (deletedAt != null)
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        price: true,
+        finalPrice: true,
+        stockQuantity: true,
+        soldCount: true,
+      },
       relations: {
-        categories: true,
-        authors: true,
-        albums: {
-          media: true,
-        },
+        albums: { media: true },
       },
     });
+
+    // Gom ID của các sản phẩm hợp lệ
+    const validIds = validProducts.map((p) => p.id);
+
+    // Lọc ra các ID mà FE gửi lên nhưng không có trong validIds (bị xóa, ẩn, v.v.)
+    const unavailableIds = productIds.filter((id) => !validIds.includes(id));
+
+    return {
+      validProducts:  validProducts ? validProducts.map(p => this.mapProductToPublicResponse(p)) : [],
+      unavailableIds: unavailableIds,
+    };
   }
 
   async searchHybridA(searchQuery: string, limit: number = 10) {
@@ -374,7 +492,7 @@ export class ProductsService extends BaseService<Product> {
       where: { id: In(productIds) },
       relations: {
         categories: true,
-        authors: true,
+        authors: { avatar: true },
         albums: { media: true },
         bookDetail: true,
       },
@@ -409,7 +527,7 @@ export class ProductsService extends BaseService<Product> {
           soldCount: p.soldCount,
           categories:
             p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
-          authors: p.authors?.map((a) => ({ id: a.id, name: a.name })) || [],
+          authors: p.authors?.map((a) => ({ id: a.id, name: a.name, slug: a.slug, describe: a.describe, avatarUrl: a.avatar?.fileUrl })) || [],
           albums:
             p.albums
               ?.map((al) => ({
@@ -477,7 +595,7 @@ export class ProductsService extends BaseService<Product> {
       where: { id: In(productIds) },
       relations: {
         categories: true,
-        authors: true,
+        authors: { avatar: true },
         albums: { media: true }, // Kéo media từ albums
         bookDetail: true,
       },
@@ -514,7 +632,7 @@ export class ProductsService extends BaseService<Product> {
           // Ép dữ liệu relations gọn gàng lại cho FE dễ dùng
           categories:
             p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
-          authors: p.authors?.map((a) => ({ id: a.id, name: a.name })) || [],
+          authors: p.authors?.map((a) => ({ id: a.id, name: a.name, slug: a.slug, describe: a.describe, avatarUrl: a.avatar?.fileUrl })) || [],
           // Lấy danh sách ảnh và đẩy ảnh isDefault lên đầu tiên
           albums:
             p.albums
@@ -533,5 +651,67 @@ export class ProductsService extends BaseService<Product> {
       .filter(Boolean); // Lọc bỏ null
 
     return formattedProducts;
+  }
+
+  // ==========================================
+  // HÀM BỔ TRỢ: XÓA CACHE SẢN PHẨM
+  // ==========================================
+  private async clearProductCache(product: Product) {
+    try {
+      await Promise.all([
+        this.cacheManager.del(`/apis/v1/products/${product.slug}`),
+        this.cacheManager.del(`/apis/v1/products/id/${product.id}`),
+      ]);
+      // Bắn log ở Service để sau này debug dễ dàng
+      this.logger.log(`Đã xóa cache cho sản phẩm: ${product.id}`);
+    } catch (error) {
+      this.logger.error(`Lỗi khi xóa cache sản phẩm ${product.id}:`, error);
+    }
+  }
+
+  public mapProductToPublicResponse(product: Product) {
+    if (!product) return null;
+
+    return {
+      id: product.id,
+      name: product.name,
+      slug: product.slug,
+      shortDescribe: product.shortDescribe,
+      price: product.price,
+      finalPrice: product.finalPrice,
+      stockQuantity: product.stockQuantity,
+      soldCount: product.soldCount,
+      createdAt: product.createdAt,
+
+      categories: product.categories?.map((c) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+      })) || [],
+
+      authors: product.authors?.map((a) => ({
+        id: a.id,
+        name: a.name,
+        slug: a.slug,
+        describe: a.describe,
+        avatarUrl: a.avatar?.fileUrl || null,
+      })) || [],
+
+      albums: product.albums?.map((al) => ({
+        displayOrder: al.displayOrder,
+        imageUrl: al.media?.fileUrl || null,
+        altText: al.media?.altText || null,
+      })).sort((a, b) => Number(a.displayOrder) - Number(b.displayOrder)) || [],
+
+      bookDetail: product.bookDetail ? {
+        title: product.bookDetail.title,
+        describe: product.bookDetail.describe,
+        publisher: product.bookDetail.publisher,
+        publishYear: product.bookDetail.publishYear,
+        language: product.bookDetail.language,
+        format: product.bookDetail.format,
+        pageCount: product.bookDetail.pageCount,
+      } : null,
+    };
   }
 }
