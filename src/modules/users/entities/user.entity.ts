@@ -3,6 +3,7 @@ import { BaseEntity } from '@app/common/base/base.entity';
 import { Authenticator } from '@app/modules/auth/entities/authenticator.entity';
 import { UserDetail } from './user-detail.entity';
 import { Exclude } from 'class-transformer';
+import { Review } from '@app/modules/reviews/entities/review.entity';
 
 @Entity('users')
 export class User extends BaseEntity {
@@ -63,4 +64,7 @@ export class User extends BaseEntity {
     cascade: true,
   })
   userDetail?: UserDetail;
+
+  @OneToMany(() => Review, (review) => review.user)
+  reviews?: Review[];
 }

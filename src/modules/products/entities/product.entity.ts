@@ -5,6 +5,7 @@ import { Author } from './author.entity';
 import { Category } from '../../categories/entities/category.entity';
 import { StatusProduct } from '@app/common/enums/status-product.enum';
 import { ProductAlbum } from './product-album.entity';
+import { Review } from '../../reviews/entities/review.entity';
 
 @Entity('products')
 export class Product extends BaseEntity {
@@ -91,4 +92,7 @@ export class Product extends BaseEntity {
 
   @OneToMany(() => ProductAlbum, (album) => album.product, { cascade: true })
   albums?: ProductAlbum[];
+
+  @OneToMany(() => Review, (review) => review.product)
+  reviews?: Review[];
 }

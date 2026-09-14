@@ -16,6 +16,7 @@ import { AiService } from '../ai/ai.service';
 import { Category } from '../categories/entities/category.entity';
 import { MediaFolder } from '@app/common/enums/media-folder.enum';
 import { StatusProduct } from '@app/common/enums/status-product.enum';
+import { StatusReview } from '@app/common/enums/status-review.enum';
 import { ProductAlbum } from './entities/product-album.entity';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
@@ -235,6 +236,9 @@ export class ProductsService extends BaseService<Product> {
         albums: {
           media: true,
         },
+        reviews: {
+          user: { userDetail: true },
+        },
       },
     });
     if (!product) throw new NotFoundException('Truy xuất dữ liệu thất bại');
@@ -249,6 +253,9 @@ export class ProductsService extends BaseService<Product> {
         categories: true,
         authors: { avatar: true },
         bookDetail: true,
+        reviews: {
+          user: { userDetail: true },
+        },
       },
     });
 
@@ -672,6 +679,26 @@ export class ProductsService extends BaseService<Product> {
   public mapProductToPublicResponse(product: Product) {
     if (!product) return null;
 
+    // Bộ lọc map-public: chỉ lấy review có status là APPROVED và chưa bị xóa mềm
+    const approvedReviews =
+      product.reviews?.filter(
+        (r) => r.status === StatusReview.APPROVED && !r.deletedAt,
+      ) || [];
+
+    const totalReviews = approvedReviews.length;
+    const breakdown = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    let sumRating = 0;
+
+    for (const r of approvedReviews) {
+      const star = Math.min(5, Math.max(1, Math.round(Number(r.rating))));
+      breakdown[star as 1 | 2 | 3 | 4 | 5] =
+        (breakdown[star as 1 | 2 | 3 | 4 | 5] || 0) + 1;
+      sumRating += Number(r.rating);
+    }
+
+    const averageRating =
+      totalReviews > 0 ? Number((sumRating / totalReviews).toFixed(1)) : 0;
+
     return {
       id: product.id,
       name: product.name,
@@ -712,6 +739,30 @@ export class ProductsService extends BaseService<Product> {
         format: product.bookDetail.format,
         pageCount: product.bookDetail.pageCount,
       } : null,
+
+      reviews: approvedReviews.map((r) => ({
+        id: r.id,
+        rating: r.rating,
+        title: r.title || null,
+        comment: r.comment,
+        isPurchased: r.isPurchased,
+        adminReply: r.adminReply || null,
+        adminReplyAt: r.adminReplyAt || null,
+        createdAt: r.createdAt,
+        user: {
+          id: r.user?.id,
+          fullName:
+            r.user?.userDetail?.fullName ||
+            (r.user?.email ? r.user.email.split('@')[0] : 'Khách hàng'),
+          avatarUrl: r.user?.userDetail?.avatarUrl || null,
+        },
+      })),
+
+      ratingStats: {
+        averageRating,
+        totalReviews,
+        breakdown,
+      },
     };
   }
 }
