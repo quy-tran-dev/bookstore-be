@@ -127,6 +127,9 @@ export class PublicProductsController {
         authors: { avatar: true },
         albums: { media: true },
         bookDetail: true,
+        reviews: {
+          user: { userDetail: true },
+        },
       },
     );
 
@@ -146,6 +149,9 @@ export class PublicProductsController {
         authors: { avatar: true },
         albums: { media: true },
         bookDetail: true,
+        reviews: {
+          user: { userDetail: true },
+        },
       },
     );
 

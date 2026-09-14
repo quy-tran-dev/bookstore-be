@@ -18,6 +18,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
 import { CacheModule } from '@nestjs/cache-manager';
 
 @Module({
@@ -63,6 +64,7 @@ import { CacheModule } from '@nestjs/cache-manager';
     MediaModule,
     NotificationsModule,
     OrdersModule,
+    ReviewsModule,
   ],
   controllers: [AppController],
   providers,

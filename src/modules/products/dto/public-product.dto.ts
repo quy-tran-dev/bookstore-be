@@ -1,6 +1,10 @@
 import { Exclude, Expose, Transform, Type } from 'class-transformer';
 import { PublicAuthorResponseDto } from './public-author.dto';
 import { PublicCategoryResponseDto } from '@app/modules/categories/dto/public-category.dto';
+import {
+  ProductRatingStatsDto,
+  PublicReviewResponseDto,
+} from '@app/modules/reviews/dto/public-review.dto';
 
 @Exclude()
 export class PublicAlbumResponseDto {
@@ -55,6 +59,13 @@ export class PublicProductDetailResponseDto extends PublicProductListResponseDto
   @Expose()
   @Type(() => PublicBookDetailResponseDto)
   bookDetail?: PublicBookDetailResponseDto;
+
+  @Expose()
+  @Type(() => PublicReviewResponseDto)
+  reviews?: PublicReviewResponseDto[];
+
+  @Expose()
+  ratingStats?: ProductRatingStatsDto;
 }
 
 @Exclude()
