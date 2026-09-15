@@ -449,37 +449,105 @@ export class ProductsService extends BaseService<Product> {
     };
   }
 
-  async searchHybridA(searchQuery: string, limit: number = 10) {
-    // 1. Tạo Vector và FTS Query
+  // Danh sách stop words tiếng Việt phổ biến thường gây nhiễu cho Full-Text Search
+  private static readonly VIETNAMESE_STOP_WORDS = new Set([
+    'mua', 'bán', 'giá', 'cũ', 'rẻ', 'cho', 'của', 'và', 'ở', 'tại',
+    'các', 'những', 'được', 'bởi', 'với', 'là', 'có', 'trong', 'về',
+    'đến', 'từ', 'theo', 'như', 'đã', 'sẽ', 'đang', 'nào', 'gì', 'ai',
+    'sách', 'cuốn', 'quyển', 'bộ', 'tập', 'tìm', 'kiếm', 'hay', 'nhất',
+  ]);
+
+  /**
+   * Chuẩn hóa từ khóa FTS:
+   * 1. Loại bỏ ký tự đặc biệt nguy hiểm cho to_tsquery
+   * 2. Lọc bỏ stop words tiếng Việt
+   * 3. Dùng toán tử & (AND) làm mỏ neo chính xác để chặn đứng từ khóa rác lọt vào
+   */
+  private buildCleanFtsQuery(searchQuery: string, useOr: boolean = false): string {
+    const sanitized = searchQuery
+      .trim()
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ');
+
+    const words = sanitized.split(' ').filter(Boolean);
+    if (words.length === 0) return 'empty:*';
+
+    // Lọc stop words
+    const meaningfulWords = words.filter(
+      (w) => !ProductsService.VIETNAMESE_STOP_WORDS.has(w),
+    );
+
+    const targetWords = meaningfulWords.length > 0 ? meaningfulWords : words;
+    const operator = useOr ? ' | ' : ' & ';
+
+    return targetWords.map((word) => `${word}:*`).join(operator);
+  }
+
+  async searchHybridA(
+    searchQuery: string,
+    limit: number = 10,
+    options?: {
+      alpha?: number;
+      threshold?: number;
+      normalizeScore?: boolean;
+      useOrOperator?: boolean;
+    },
+  ) {
+    const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.6;
+    const ftsWeight = Number((1 - alpha).toFixed(2));
+    const threshold =
+      options?.threshold !== undefined ? Number(options.threshold) : 1.2;
+    const normalizeScore = options?.normalizeScore ?? false;
+
+    // 1. Tạo Vector và FTS Query (Đã lọc stop words & dùng toán tử &)
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
     const formattedVector = `[${queryVector.join(',')}]`;
-    const ftsQuery = searchQuery
-      .trim()
-      .replace(/\s+/g, ' ')
-      .split(' ')
-      .map((word) => `${word}:*`)
-      .join(' | ');
+    const ftsQuery = this.buildCleanFtsQuery(
+      searchQuery,
+      options?.useOrOperator ?? false,
+    );
+
+    // Chuẩn hóa điểm nếu được yêu cầu
+    const aiExpr = normalizeScore
+      ? `GREATEST(0, 1 - (product.embedding <-> :embedding))`
+      : `(1 - (product.embedding <-> :embedding))`;
+
+    const ftsExpr = normalizeScore
+      ? `(ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)) / (0.1 + ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))))`
+      : `ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))`;
 
     // ==========================================
     // BƯỚC 1: TÌM KIẾM AI L2 DISTANCE ĐỂ LẤY TOP 10 IDs
     // ==========================================
+    const selectExpr =
+      alpha === 0
+        ? `${ftsExpr}`
+        : alpha === 1
+        ? `${aiExpr}`
+        : `(${alpha} * ${aiExpr}) + (${ftsWeight} * ${ftsExpr})`;
+
     const rawResults = await this.productRepository
       .createQueryBuilder('product')
       .select(['product.id AS id'])
-      .addSelect(
-        `(0.6 * (1 - (product.embedding <-> :embedding))) + 
-         (0.4 * ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)))`,
-        'final_score',
-      )
+      .addSelect(selectExpr, 'final_score')
       .where('product.status = :status', { status: 1 })
       .andWhere('product.isVerified = :isVerified', { isVerified: true })
       .andWhere('product.deleted_at IS NULL')
       .andWhere(
         new Brackets((qb) => {
-          // Ngưỡng 1.2 dành riêng cho L2 Distance
-          qb.where('product.embedding <-> :embedding < 1.2').orWhere(
-            "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
-          );
+          if (alpha === 0) {
+            // 100% FTS
+            qb.where("product.document_with_weights @@ to_tsquery('simple', :ftsQuery)");
+          } else if (alpha === 1) {
+            // 100% Vector AI
+            qb.where(`product.embedding <-> :embedding < ${threshold}`);
+          } else {
+            // Hybrid kết hợp
+            qb.where(`product.embedding <-> :embedding < ${threshold}`).orWhere(
+              "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
+            );
+          }
         }),
       )
       .setParameters({ embedding: formattedVector, ftsQuery })
@@ -553,36 +621,67 @@ export class ProductsService extends BaseService<Product> {
     return formattedProducts;
   }
 
-  async searchHybridB(searchQuery: string, limit: number = 10) {
-    // 1. Tạo Vector và FTS Query
+  async searchHybridB(
+    searchQuery: string,
+    limit: number = 10,
+    options?: {
+      alpha?: number;
+      threshold?: number;
+      normalizeScore?: boolean;
+      useOrOperator?: boolean;
+    },
+  ) {
+    const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.6;
+    const ftsWeight = Number((1 - alpha).toFixed(2));
+    const threshold =
+      options?.threshold !== undefined ? Number(options.threshold) : 0.6;
+    const normalizeScore = options?.normalizeScore ?? false;
+
+    // 1. Tạo Vector và FTS Query (Đã lọc stop words & dùng toán tử &)
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
     const formattedVector = `[${queryVector.join(',')}]`;
-    const ftsQuery = searchQuery
-      .trim()
-      .replace(/\s+/g, ' ')
-      .split(' ')
-      .map((word) => `${word}:*`)
-      .join(' | ');
+    const ftsQuery = this.buildCleanFtsQuery(
+      searchQuery,
+      options?.useOrOperator ?? false,
+    );
+
+    // Chuẩn hóa điểm nếu được yêu cầu
+    const aiExpr = `(1 - (product.embedding <=> :embedding))`;
+    const ftsExpr = normalizeScore
+      ? `(ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)) / (0.1 + ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))))`
+      : `ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))`;
 
     // ==========================================
     // BƯỚC 1: TÌM KIẾM AI ĐỂ LẤY TOP 10 IDs VÀ ĐIỂM SỐ
     // ==========================================
+    const selectExpr =
+      alpha === 0
+        ? `${ftsExpr}`
+        : alpha === 1
+        ? `${aiExpr}`
+        : `(${alpha} * ${aiExpr}) + (${ftsWeight} * ${ftsExpr})`;
+
     const rawResults = await this.productRepository
       .createQueryBuilder('product')
       .select(['product.id AS id'])
-      .addSelect(
-        `(0.6 * (1 - (product.embedding <=> :embedding))) + 
-         (0.4 * ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)))`,
-        'final_score',
-      )
+      .addSelect(selectExpr, 'final_score')
       .where('product.status = :status', { status: 1 })
       .andWhere('product.isVerified = :isVerified', { isVerified: true })
       .andWhere('product.deleted_at IS NULL')
       .andWhere(
         new Brackets((qb) => {
-          qb.where('product.embedding <=> :embedding < 0.6').orWhere(
-            "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
-          );
+          if (alpha === 0) {
+            // 100% FTS
+            qb.where("product.document_with_weights @@ to_tsquery('simple', :ftsQuery)");
+          } else if (alpha === 1) {
+            // 100% Vector AI
+            qb.where(`product.embedding <=> :embedding < ${threshold}`);
+          } else {
+            // Hybrid kết hợp
+            qb.where(`product.embedding <=> :embedding < ${threshold}`).orWhere(
+              "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
+            );
+          }
         }),
       )
       .setParameters({ embedding: formattedVector, ftsQuery })
