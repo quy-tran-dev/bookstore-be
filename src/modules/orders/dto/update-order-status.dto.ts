@@ -3,15 +3,15 @@ import { OrderStatus } from '@app/common/enums/order-status.enum';
 import { PaymentStatus } from '@app/common/enums/payment-status.enum';
 
 export class UpdateOrderStatusDto {
-  @IsEnum(OrderStatus)
-  @IsNotEmpty()
+  @IsEnum(OrderStatus, { message: 'Trạng thái đơn hàng không hợp lệ' })
+  @IsOptional()
   status?: OrderStatus;
 
-  @IsString()
+  @IsEnum(PaymentStatus, { message: 'Trạng thái thanh toán không hợp lệ' })
+  @IsOptional()
+  paymentStatus?: PaymentStatus;
+
+  @IsString({ message: 'Ghi chú admin phải là chuỗi' })
   @IsOptional()
   noteAdmin?: string;
-
-  // Thêm field này để lúc tích hợp VNPAY/MoMo có thể cập nhật trạng thái thanh toán
-  @IsEnum(PaymentStatus)
-  paymentStatus?: PaymentStatus;
 }

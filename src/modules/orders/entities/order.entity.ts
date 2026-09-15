@@ -5,6 +5,7 @@ import { OrderItem } from './order-item.entity';
 import { OrderStatus } from '@app/common/enums/order-status.enum';
 import { PaymentMethod } from '@app/common/enums/payment-method.enum';
 import { PaymentStatus } from '@app/common/enums/payment-status.enum';
+import { Payment } from '../../payment/entities/payment.entity';
 
 @Entity('orders')
 export class Order extends BaseEntity {
@@ -60,4 +61,7 @@ export class Order extends BaseEntity {
     eager: true // Tự load chi tiết khi gọi find Order
   })
   items?: OrderItem[];
+
+  @OneToMany(() => Payment, (payment) => payment.order, { cascade: true })
+  payments?: Payment[];
 }
