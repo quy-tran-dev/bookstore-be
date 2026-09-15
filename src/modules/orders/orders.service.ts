@@ -172,19 +172,30 @@ export class OrdersService {
 
     if (!order) throw new NotFoundException('Đơn hàng không tồn tại');
 
+    // Kiểm tra nếu body rỗng
+    if (
+      updateDto.status === undefined &&
+      updateDto.paymentStatus === undefined &&
+      updateDto.noteAdmin === undefined
+    ) {
+      throw new BadRequestException(
+        'Vui lòng cung cấp ít nhất một thông tin cần cập nhật (status, paymentStatus hoặc noteAdmin).',
+      );
+    }
+
     this.validateOrderTransition(order, updateDto);
 
     const oldStatus = order.status as OrderStatus;
     const newStatus = updateDto.status || oldStatus;
 
     if (updateDto.paymentStatus) order.paymentStatus = updateDto.paymentStatus;
-    if (updateDto.noteAdmin) order.noteAdmin = updateDto.noteAdmin;
+    if (updateDto.noteAdmin !== undefined) order.noteAdmin = updateDto.noteAdmin;
     if (currentUserId) order.updateBy = currentUserId;
 
     if (
       oldStatus === newStatus &&
       !updateDto.paymentStatus &&
-      !updateDto.noteAdmin
+      updateDto.noteAdmin === undefined
     ) {
       return order; // Không có gì thay đổi
     }
@@ -368,6 +379,7 @@ export class OrdersService {
             albums: { media: true },
           },
         },
+        payments: true,
       },
     });
 

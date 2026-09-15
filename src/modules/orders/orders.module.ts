@@ -16,5 +16,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
   ],
   controllers: [AdminOrdersController, PuclicOrdersController],
   providers: [OrdersService],
+  exports: [OrdersService, TypeOrmModule],
 })
 export class OrdersModule {}

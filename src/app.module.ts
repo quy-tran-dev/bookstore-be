@@ -19,6 +19,7 @@ import { join } from 'path';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
+import { PaymentModule } from './modules/payment/payment.module';
 import { CacheModule } from '@nestjs/cache-manager';
 
 @Module({
@@ -65,6 +66,7 @@ import { CacheModule } from '@nestjs/cache-manager';
     NotificationsModule,
     OrdersModule,
     ReviewsModule,
+    PaymentModule,
   ],
   controllers: [AppController],
   providers,
