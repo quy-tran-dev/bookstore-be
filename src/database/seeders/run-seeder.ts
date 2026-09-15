@@ -3,6 +3,7 @@ import { AppModule } from '../../app.module';
 import { DataSource } from 'typeorm';
 import { seedUsers } from './user.seeder';
 import { seedProducts } from './product.seeder';
+import { seedOrders } from './order.seeder';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule);
@@ -15,7 +16,8 @@ async function bootstrap() {
   try {
     // Chạy theo thứ tự quy định
     await seedUsers(dataSource);
-    await seedProducts(dataSource, app); // <- Sau này add thêm vào đây
+    await seedProducts(dataSource, app);
+    await seedOrders(dataSource);
     
     console.log('\n HOÀN TẤT TOÀN BỘ SEEDER!');
   } catch (error) {
