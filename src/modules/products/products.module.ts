@@ -13,6 +13,7 @@ import { PublicProductsController } from '@app/apis/v1/public/book/public-produc
 import { ProductAlbum } from './entities/product-album.entity';
 import { Category } from '../categories/entities/category.entity';
 import { PublicAuthorsController } from '@app/apis/v1/public/book/public-authors.controller';
+import { SearchBenchmarkService } from './benchmark/search-benchmark.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -31,7 +32,7 @@ import { PublicAuthorsController } from '@app/apis/v1/public/book/public-authors
     PublicProductsController,
     PublicAuthorsController,
   ],
-  providers: [ProductsService, AuthorsService],
-  exports: [ProductsService, AuthorsService, TypeOrmModule],
+  providers: [ProductsService, AuthorsService, SearchBenchmarkService],
+  exports: [ProductsService, AuthorsService, SearchBenchmarkService, TypeOrmModule],
 })
 export class ProductsModule {}

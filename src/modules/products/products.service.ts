@@ -20,6 +20,7 @@ import { StatusReview } from '@app/common/enums/status-review.enum';
 import { ProductAlbum } from './entities/product-album.entity';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
+import { v7 as uuidv7 } from 'uuid';
 @Injectable()
 export class ProductsService extends BaseService<Product> {
   private readonly logger = new Logger(ProductsService.name);
@@ -81,6 +82,16 @@ export class ProductsService extends BaseService<Product> {
 
     const payload = this.formatRelationData(data);
 
+    if (payload.albums && Array.isArray(payload.albums)) {
+      payload.albums = payload.albums.map((item: any) => {
+        const albumEntity = new ProductAlbum();
+        albumEntity.id = uuidv7();
+        albumEntity.displayOrder = item.displayOrder;
+        albumEntity.media = item.media;
+        return albumEntity;
+      });
+    }
+
     // 2. GỌI HÀM AI DÙNG CHUNG
     const aiData = await this.generateEmbeddingAndSeoKeywords(
       data.name,
@@ -112,6 +123,7 @@ export class ProductsService extends BaseService<Product> {
         bookDetail: true,
         categories: true,
         authors: true,
+        albums: { media: true },
       },
     });
 
@@ -165,20 +177,19 @@ export class ProductsService extends BaseService<Product> {
       payload.bookDetail.id = entity.bookDetail.id;
     }
 
-    if (payload.albums && entity.albums) {
-      payload.albums = payload.albums.map((newAlbum) => {
+    if (payload.albums && Array.isArray(payload.albums)) {
+      const existingAlbums = entity.albums || [];
+      payload.albums = payload.albums.map((newAlbum: any) => {
         // Tìm xem ảnh này đã tồn tại trong DB chưa (dựa vào mediaId)
-        const existingAlbum = entity.albums?.find(
-          (oldAlbum) => oldAlbum.media?.id === newAlbum.media.id,
+        const existingAlbum = existingAlbums.find(
+          (oldAlbum) => oldAlbum.media?.id === newAlbum.media?.id,
         );
 
-        // Nếu ảnh đã có, gắn lại ID cũ để TypeORM hiểu là đang Update
-        if (existingAlbum) {
-          return { ...newAlbum, id: existingAlbum.id };
-        }
-
-        // Nếu là ảnh mới thêm vào, cứ giữ nguyên (TypeORM sẽ tự động Insert)
-        return Object.assign(new ProductAlbum(), newAlbum);
+        const albumEntity = new ProductAlbum();
+        albumEntity.id = existingAlbum ? existingAlbum.id : uuidv7();
+        albumEntity.displayOrder = newAlbum.displayOrder;
+        albumEntity.media = newAlbum.media;
+        return albumEntity;
       });
     }
 
@@ -444,42 +455,154 @@ export class ProductsService extends BaseService<Product> {
     const unavailableIds = productIds.filter((id) => !validIds.includes(id));
 
     return {
-      validProducts:  validProducts ? validProducts.map(p => this.mapProductToPublicResponse(p)) : [],
+      validProducts: validProducts
+        ? validProducts.map((p) => this.mapProductToPublicResponse(p))
+        : [],
       unavailableIds: unavailableIds,
     };
   }
 
-  async searchHybridA(searchQuery: string, limit: number = 10) {
-    // 1. Tạo Vector và FTS Query
+  // Danh sách stop words tiếng Việt phổ biến thường gây nhiễu cho Full-Text Search
+  private static readonly VIETNAMESE_STOP_WORDS = new Set([
+    'mua',
+    'bán',
+    'giá',
+    'cũ',
+    'rẻ',
+    'cho',
+    'của',
+    'và',
+    'ở',
+    'tại',
+    'các',
+    'những',
+    'được',
+    'bởi',
+    'với',
+    'là',
+    'có',
+    'trong',
+    'về',
+    'đến',
+    'từ',
+    'theo',
+    'như',
+    'đã',
+    'sẽ',
+    'đang',
+    'nào',
+    'gì',
+    'ai',
+    'sách',
+    'cuốn',
+    'quyển',
+    'bộ',
+    'tập',
+    'tìm',
+    'kiếm',
+    'hay',
+    'nhất',
+  ]);
+
+  /**
+   * Chuẩn hóa từ khóa FTS:
+   * 1. Loại bỏ ký tự đặc biệt nguy hiểm cho to_tsquery
+   * 2. Lọc bỏ stop words tiếng Việt
+   * 3. Dùng toán tử & (AND) làm mỏ neo chính xác để chặn đứng từ khóa rác lọt vào
+   */
+  private buildCleanFtsQuery(
+    searchQuery: string,
+    useOr: boolean = false,
+  ): string {
+    const sanitized = searchQuery
+      .trim()
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ');
+
+    const words = sanitized.split(' ').filter(Boolean);
+    if (words.length === 0) return 'empty:*';
+
+    // Lọc stop words
+    const meaningfulWords = words.filter(
+      (w) => !ProductsService.VIETNAMESE_STOP_WORDS.has(w),
+    );
+
+    const targetWords = meaningfulWords.length > 0 ? meaningfulWords : words;
+    const operator = useOr ? ' | ' : ' & ';
+
+    return targetWords.map((word) => `${word}:*`).join(operator);
+  }
+
+  async searchHybridA(
+    searchQuery: string,
+    limit: number = 10,
+    options?: {
+      alpha?: number;
+      threshold?: number;
+      minScore?: number;
+      normalizeScore?: boolean;
+      useOrOperator?: boolean;
+    },
+  ) {
+    const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.7;
+    const ftsWeight = Number((1 - alpha).toFixed(2));
+    const threshold =
+      options?.threshold !== undefined ? Number(options.threshold) : 1.15;
+    const minScore =
+      options?.minScore !== undefined ? Number(options.minScore) : 0.25;
+    const normalizeScore = options?.normalizeScore ?? false;
+
+    // 1. Tạo Vector và FTS Query (Đã lọc stop words & dùng toán tử &)
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
     const formattedVector = `[${queryVector.join(',')}]`;
-    const ftsQuery = searchQuery
-      .trim()
-      .replace(/\s+/g, ' ')
-      .split(' ')
-      .map((word) => `${word}:*`)
-      .join(' | ');
+    const ftsQuery = this.buildCleanFtsQuery(
+      searchQuery,
+      options?.useOrOperator ?? false,
+    );
+
+    // Chuẩn hóa điểm nếu được yêu cầu
+    const aiExpr = normalizeScore
+      ? `GREATEST(0, 1 - (product.embedding <-> :embedding))`
+      : `(1 - (product.embedding <-> :embedding))`;
+
+    const ftsExpr = normalizeScore
+      ? `(ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)) / (0.1 + ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))))`
+      : `ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))`;
 
     // ==========================================
     // BƯỚC 1: TÌM KIẾM AI L2 DISTANCE ĐỂ LẤY TOP 10 IDs
     // ==========================================
+    const selectExpr =
+      alpha === 0
+        ? `${ftsExpr}`
+        : alpha === 1
+          ? `${aiExpr}`
+          : `(${alpha} * ${aiExpr}) + (${ftsWeight} * ${ftsExpr})`;
+
     const rawResults = await this.productRepository
       .createQueryBuilder('product')
       .select(['product.id AS id'])
-      .addSelect(
-        `(0.6 * (1 - (product.embedding <-> :embedding))) + 
-         (0.4 * ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)))`,
-        'final_score',
-      )
+      .addSelect(selectExpr, 'final_score')
       .where('product.status = :status', { status: 1 })
       .andWhere('product.isVerified = :isVerified', { isVerified: true })
       .andWhere('product.deleted_at IS NULL')
       .andWhere(
         new Brackets((qb) => {
-          // Ngưỡng 1.2 dành riêng cho L2 Distance
-          qb.where('product.embedding <-> :embedding < 1.2').orWhere(
-            "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
-          );
+          if (alpha === 0) {
+            // 100% FTS
+            qb.where(
+              "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
+            );
+          } else if (alpha === 1) {
+            // 100% Vector AI
+            qb.where(`product.embedding <-> :embedding < ${threshold}`);
+          } else {
+            // Hybrid kết hợp
+            qb.where(`product.embedding <-> :embedding < ${threshold}`).orWhere(
+              "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
+            );
+          }
         }),
       )
       .setParameters({ embedding: formattedVector, ftsQuery })
@@ -487,10 +610,18 @@ export class ProductsService extends BaseService<Product> {
       .limit(limit)
       .getRawMany();
 
-    if (rawResults.length === 0) return [];
+    // Lọc theo ngưỡng điểm tối thiểu (minScore)
+    let filteredResults = rawResults;
+    if (minScore !== undefined) {
+      filteredResults = filteredResults.filter(
+        (r) => parseFloat(r.final_score) >= minScore,
+      );
+    }
+
+    if (filteredResults.length === 0) return [];
 
     // Trích xuất mảng ID
-    const productIds = rawResults.map((r) => r.id);
+    const productIds = filteredResults.map((r) => r.id);
 
     // ==========================================
     // BƯỚC 2: KÉO DỮ LIỆU QUAN HỆ (BỎ EMBEDDING)
@@ -518,7 +649,7 @@ export class ProductsService extends BaseService<Product> {
     // ==========================================
     // BƯỚC 3: MAPPING THÀNH DTO ẢO
     // ==========================================
-    const formattedProducts = rawResults
+    const formattedProducts = filteredResults
       .map((raw) => {
         const p = products.find((prod) => prod.id === raw.id);
         if (!p) return null;
@@ -534,7 +665,14 @@ export class ProductsService extends BaseService<Product> {
           soldCount: p.soldCount,
           categories:
             p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
-          authors: p.authors?.map((a) => ({ id: a.id, name: a.name, slug: a.slug, describe: a.describe, avatarUrl: a.avatar?.fileUrl })) || [],
+          authors:
+            p.authors?.map((a) => ({
+              id: a.id,
+              name: a.name,
+              slug: a.slug,
+              describe: a.describe,
+              avatarUrl: a.avatar?.fileUrl,
+            })) || [],
           albums:
             p.albums
               ?.map((al) => ({
@@ -553,36 +691,72 @@ export class ProductsService extends BaseService<Product> {
     return formattedProducts;
   }
 
-  async searchHybridB(searchQuery: string, limit: number = 10) {
-    // 1. Tạo Vector và FTS Query
+  async searchHybridB(
+    searchQuery: string,
+    limit: number = 10,
+    options?: {
+      alpha?: number;
+      threshold?: number;
+      minScore?: number;
+      normalizeScore?: boolean;
+      useOrOperator?: boolean;
+    },
+  ) {
+    const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.7;
+    const ftsWeight = Number((1 - alpha).toFixed(2));
+    const threshold =
+      options?.threshold !== undefined ? Number(options.threshold) : 0.65;
+    const minScore =
+      options?.minScore !== undefined ? Number(options.minScore) : 0.25;
+    const normalizeScore = options?.normalizeScore ?? false;
+
+    // 1. Tạo Vector và FTS Query (Đã lọc stop words & dùng toán tử &)
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
     const formattedVector = `[${queryVector.join(',')}]`;
-    const ftsQuery = searchQuery
-      .trim()
-      .replace(/\s+/g, ' ')
-      .split(' ')
-      .map((word) => `${word}:*`)
-      .join(' | ');
+    const ftsQuery = this.buildCleanFtsQuery(
+      searchQuery,
+      options?.useOrOperator ?? false,
+    );
+
+    // Chuẩn hóa điểm nếu được yêu cầu
+    const aiExpr = `(1 - (product.embedding <=> :embedding))`;
+    const ftsExpr = normalizeScore
+      ? `(ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)) / (0.1 + ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))))`
+      : `ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))`;
 
     // ==========================================
     // BƯỚC 1: TÌM KIẾM AI ĐỂ LẤY TOP 10 IDs VÀ ĐIỂM SỐ
     // ==========================================
+    const selectExpr =
+      alpha === 0
+        ? `${ftsExpr}`
+        : alpha === 1
+          ? `${aiExpr}`
+          : `(${alpha} * ${aiExpr}) + (${ftsWeight} * ${ftsExpr})`;
+
     const rawResults = await this.productRepository
       .createQueryBuilder('product')
       .select(['product.id AS id'])
-      .addSelect(
-        `(0.6 * (1 - (product.embedding <=> :embedding))) + 
-         (0.4 * ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)))`,
-        'final_score',
-      )
+      .addSelect(selectExpr, 'final_score')
       .where('product.status = :status', { status: 1 })
       .andWhere('product.isVerified = :isVerified', { isVerified: true })
       .andWhere('product.deleted_at IS NULL')
       .andWhere(
         new Brackets((qb) => {
-          qb.where('product.embedding <=> :embedding < 0.6').orWhere(
-            "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
-          );
+          if (alpha === 0) {
+            // 100% FTS
+            qb.where(
+              "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
+            );
+          } else if (alpha === 1) {
+            // 100% Vector AI
+            qb.where(`product.embedding <=> :embedding < ${threshold}`);
+          } else {
+            // Hybrid kết hợp
+            qb.where(`product.embedding <=> :embedding < ${threshold}`).orWhere(
+              "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
+            );
+          }
         }),
       )
       .setParameters({ embedding: formattedVector, ftsQuery })
@@ -590,10 +764,18 @@ export class ProductsService extends BaseService<Product> {
       .limit(limit)
       .getRawMany();
 
-    if (rawResults.length === 0) return [];
+    // Lọc theo ngưỡng điểm tối thiểu (minScore)
+    let filteredResults = rawResults;
+    if (minScore !== undefined) {
+      filteredResults = filteredResults.filter(
+        (r) => parseFloat(r.final_score) >= minScore,
+      );
+    }
+
+    if (filteredResults.length === 0) return [];
 
     // Trích xuất mảng ID từ kết quả thô
-    const productIds = rawResults.map((r) => r.id);
+    const productIds = filteredResults.map((r) => r.id);
 
     // ==========================================
     // BƯỚC 2: KÉO DỮ LIỆU ĐẦY ĐỦ KÈM QUAN HỆ (BỎ EMBEDDING)
@@ -622,7 +804,7 @@ export class ProductsService extends BaseService<Product> {
     // BƯỚC 3: MAPPING THÀNH DTO ẢO CHO FRONTEND
     // ==========================================
     // Phải map lại vì lệnh .find() của TypeORM không giữ đúng thứ tự orderBy điểm số của Bước 1
-    const formattedProducts = rawResults
+    const formattedProducts = filteredResults
       .map((raw) => {
         const p = products.find((prod) => prod.id === raw.id);
         if (!p) return null;
@@ -639,7 +821,14 @@ export class ProductsService extends BaseService<Product> {
           // Ép dữ liệu relations gọn gàng lại cho FE dễ dùng
           categories:
             p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
-          authors: p.authors?.map((a) => ({ id: a.id, name: a.name, slug: a.slug, describe: a.describe, avatarUrl: a.avatar?.fileUrl })) || [],
+          authors:
+            p.authors?.map((a) => ({
+              id: a.id,
+              name: a.name,
+              slug: a.slug,
+              describe: a.describe,
+              avatarUrl: a.avatar?.fileUrl,
+            })) || [],
           // Lấy danh sách ảnh và đẩy ảnh isDefault lên đầu tiên
           albums:
             p.albums
@@ -710,35 +899,43 @@ export class ProductsService extends BaseService<Product> {
       soldCount: product.soldCount,
       createdAt: product.createdAt,
 
-      categories: product.categories?.map((c) => ({
-        id: c.id,
-        name: c.name,
-        slug: c.slug,
-      })) || [],
+      categories:
+        product.categories?.map((c) => ({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+        })) || [],
 
-      authors: product.authors?.map((a) => ({
-        id: a.id,
-        name: a.name,
-        slug: a.slug,
-        describe: a.describe,
-        avatarUrl: a.avatar?.fileUrl || null,
-      })) || [],
+      authors:
+        product.authors?.map((a) => ({
+          id: a.id,
+          name: a.name,
+          slug: a.slug,
+          describe: a.describe,
+          avatarUrl: a.avatar?.fileUrl || null,
+        })) || [],
 
-      albums: product.albums?.map((al) => ({
-        displayOrder: al.displayOrder,
-        imageUrl: al.media?.fileUrl || null,
-        altText: al.media?.altText || null,
-      })).sort((a, b) => Number(a.displayOrder) - Number(b.displayOrder)) || [],
+      albums:
+        product.albums
+          ?.map((al) => ({
+            displayOrder: al.displayOrder,
+            imageUrl: al.media?.fileUrl || null,
+            altText: al.media?.altText || null,
+          }))
+          .sort((a, b) => Number(a.displayOrder) - Number(b.displayOrder)) ||
+        [],
 
-      bookDetail: product.bookDetail ? {
-        title: product.bookDetail.title,
-        describe: product.bookDetail.describe,
-        publisher: product.bookDetail.publisher,
-        publishYear: product.bookDetail.publishYear,
-        language: product.bookDetail.language,
-        format: product.bookDetail.format,
-        pageCount: product.bookDetail.pageCount,
-      } : null,
+      bookDetail: product.bookDetail
+        ? {
+            title: product.bookDetail.title,
+            describe: product.bookDetail.describe,
+            publisher: product.bookDetail.publisher,
+            publishYear: product.bookDetail.publishYear,
+            language: product.bookDetail.language,
+            format: product.bookDetail.format,
+            pageCount: product.bookDetail.pageCount,
+          }
+        : null,
 
       reviews: approvedReviews.map((r) => ({
         id: r.id,

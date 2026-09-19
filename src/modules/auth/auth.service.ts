@@ -3,12 +3,15 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } from '@simplewebauthn/server';
@@ -43,7 +46,74 @@ export class AuthService {
   }
 
   // ==========================================
-  // WEBAUTHN
+  // WEBAUTHN - REGISTER PASSKEY
+  // ==========================================
+  async getRegisterChallenge(userId: string) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: { authenticators: true, userDetail: true },
+    });
+    if (!user) throw new NotFoundException('Người dùng không tồn tại');
+
+    const options = await generateRegistrationOptions({
+      rpName: 'LuminaBook Store',
+      rpID: this.rpID,
+      userID: Buffer.from(user.id),
+      userName: user.email,
+      userDisplayName: user.userDetail?.fullName || user.email,
+      attestationType: 'none',
+      excludeCredentials: user.authenticators?.map((auth) => ({
+        id: auth.credentialId,
+        type: 'public-key',
+      })),
+      authenticatorSelection: {
+        residentKey: 'preferred',
+        userVerification: 'preferred',
+      },
+    });
+
+    return options;
+  }
+
+  async verifyRegister(userId: string, body: any, expectedChallenge: string) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: { authenticators: true },
+    });
+    if (!user) throw new NotFoundException('Người dùng không tồn tại');
+
+    let verification;
+    try {
+      verification = await verifyRegistrationResponse({
+        response: body,
+        expectedChallenge,
+        expectedOrigin: this.origin,
+        expectedRPID: this.rpID,
+      });
+    } catch (error: any) {
+      const errorMessage = error instanceof Error ? error.message : 'Lỗi không xác định';
+      throw new BadRequestException(`Đăng ký thiết bị sinh trắc học thất bại: ${errorMessage}`);
+    }
+
+    if (verification.verified && verification.registrationInfo) {
+      const { credential } = verification.registrationInfo;
+      const authenticator = this.authenticatorRepository.create({
+        userId: user.id,
+        credentialId: credential.id,
+        credentialPublicKey: Buffer.from(credential.publicKey),
+        counter: Number(credential.counter),
+        deviceType: verification.registrationInfo.credentialDeviceType || 'singleDevice',
+        backedUp: verification.registrationInfo.credentialBackedUp || false,
+      });
+
+      await this.authenticatorRepository.save(authenticator);
+      return { success: true, message: 'Đăng ký Passkey / Sinh trắc học thành công' };
+    }
+    throw new BadRequestException('Xác thực thiết bị thất bại');
+  }
+
+  // ==========================================
+  // WEBAUTHN - LOGIN
   // ==========================================
   async getLoginChallenge(email: string) {
     const user = await this.userRepository.findOne({
