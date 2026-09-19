@@ -22,6 +22,10 @@ export class PublicProductsController {
     private readonly searchBenchmarkService: SearchBenchmarkService,
   ) {}
 
+  /**
+   * THUẬT TOÁN A: Tìm kiếm kết hợp với Khoảng cách Euclidean (L2 Distance <->)
+   * Endpoint: GET /apis/v1/products/search-a?keyword=...
+   */
   @Get('search-a')
   async searchA(
     @Query('keyword') keyword: string,
@@ -48,11 +52,11 @@ export class PublicProductsController {
       message: 'Tìm kiếm thành công',
       data: {
         keyword: keyword,
-        algorithm: 'A (L2 Distance)',
+        algorithm: 'A (L2 Euclidean Distance)',
         parameters: {
-          alpha: options.alpha ?? 0.6,
-          ftsWeight: Number((1 - (options.alpha ?? 0.6)).toFixed(2)),
-          threshold: options.threshold ?? 1.2,
+          alpha: options.alpha ?? 0.7,
+          ftsWeight: Number((1 - (options.alpha ?? 0.7)).toFixed(2)),
+          threshold: options.threshold ?? 1.15,
           normalizeScore: options.normalizeScore,
           useOrOperator: options.useOrOperator,
         },
@@ -62,8 +66,13 @@ export class PublicProductsController {
     };
   }
 
-  @Get('search-b')
-  async searchB(
+  /**
+   * TÌM KIẾM SÁCH CHÍNH THỨC (HYBRID SEARCH - KẾT HỢP FTS VÀ AI VECTOR)
+   * Cấu hình tối ưu: Alpha = 0.7, Threshold = 0.65, minScore = 0.25, normalizeScore = false
+   * Endpoint: GET /apis/v1/products/search?keyword=...
+   */
+  @Get('search')
+  async search(
     @Query('keyword') keyword: string,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('alpha') alpha?: number,
@@ -88,11 +97,11 @@ export class PublicProductsController {
       message: 'Tìm kiếm thành công',
       data: {
         keyword: keyword,
-        algorithm: 'B (Cosine Distance)',
+        algorithm: 'Hybrid Search (PostgreSQL FTS + Gemini Vector AI)',
         parameters: {
-          alpha: options.alpha ?? 0.6,
-          ftsWeight: Number((1 - (options.alpha ?? 0.6)).toFixed(2)),
-          threshold: options.threshold ?? 0.6,
+          alpha: options.alpha ?? 0.7,
+          ftsWeight: Number((1 - (options.alpha ?? 0.7)).toFixed(2)),
+          threshold: options.threshold ?? 0.65,
           normalizeScore: options.normalizeScore,
           useOrOperator: options.useOrOperator,
         },
@@ -102,64 +111,75 @@ export class PublicProductsController {
     };
   }
 
-  /**
-   * Chạy kiểm thử Benchmark 24 câu truy vấn chuẩn trên thuật toán A hoặc B
-   * Endpoint: GET /apis/v1/products/benchmark/run?algorithm=B&alpha=0.6&threshold=0.6&normalize=true
-   */
-  @Get('benchmark/run')
-  @CacheTTL(0)
-  async runBenchmark(
-    @Query('algorithm') algorithm: 'A' | 'B' = 'B',
+  // Alias search-b để đảm bảo tương thích ngược nếu Frontend đang gọi
+  @Get('search-b')
+  async searchB(
+    @Query('keyword') keyword: string,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('alpha') alpha?: number,
     @Query('threshold') threshold?: number,
     @Query('normalize') normalize?: string,
-    @Query('details') details?: string,
+    @Query('useOr') useOr?: string,
   ) {
-    const params = {
-      alpha: alpha !== undefined ? Number(alpha) : undefined,
-      threshold: threshold !== undefined ? Number(threshold) : undefined,
-      normalizeScore: normalize === 'true' || normalize === '1',
-    };
-
-    const includeDetails = details !== 'false';
-    const report = await this.searchBenchmarkService.runBenchmark(
-      algorithm,
-      params,
-      includeDetails,
-    );
-
-    return {
-      message: `Chạy Benchmark thuật toán ${algorithm} hoàn tất`,
-      data: report,
-    };
+    return this.search(keyword, limit, alpha, threshold, normalize, useOr);
   }
 
   /**
-   * Chạy Grid Search tự động quét qua tất cả tổ hợp tham số và tìm ra cấu hình tốt nhất
-   * Endpoint: GET /apis/v1/products/benchmark/grid-search?algorithm=B
+   * So sánh trực quan 6 Kịch bản kiểm thử
+   * Endpoint: GET /apis/v1/products/benchmark/scenarios?algorithm=B
    */
-  @Get('benchmark/grid-search')
+  @Get('benchmark/scenarios')
   @CacheTTL(0)
-  async runGridSearch(@Query('algorithm') algorithm: 'A' | 'B' = 'B') {
-    const result = await this.searchBenchmarkService.runGridSearch(algorithm);
+  async run5Scenarios(
+    @Query('algorithm') algorithm: 'A' | 'B' = 'B',
+    @Query('threshold') threshold?: number,
+    @Query('normalize') normalize?: string,
+  ) {
+    const options = {
+      threshold: threshold !== undefined ? Number(threshold) : undefined,
+      normalizeScore:
+        normalize === 'true' || normalize === '1'
+          ? true
+          : normalize === 'false' || normalize === '0'
+            ? false
+            : undefined,
+    };
+    const result = await this.searchBenchmarkService.run5Scenarios(
+      algorithm,
+      options,
+    );
 
     return {
-      message: `Grid Search thuật toán ${algorithm} hoàn tất`,
+      message: `So sánh 6 Kịch bản kiểm thử thuật toán ${algorithm} hoàn tất`,
       data: result,
     };
   }
 
   /**
-   * So sánh trực quan 5 Kịch bản kinh điển (100% FTS, 100% AI, 80/20, 40/60, 60/40)
-   * Endpoint: GET /apis/v1/products/benchmark/scenarios?algorithm=B
+   * So sánh 5 Cấp độ bộ lọc ngưỡng
+   * Endpoint: GET /apis/v1/products/benchmark/thresholds?algorithm=B
    */
-  @Get('benchmark/scenarios')
+  @Get('benchmark/thresholds')
   @CacheTTL(0)
-  async run5Scenarios(@Query('algorithm') algorithm: 'A' | 'B' = 'B') {
-    const result = await this.searchBenchmarkService.run5Scenarios(algorithm);
+  async runThresholdBenchmark(
+    @Query('algorithm') algorithm: 'A' | 'B' = 'B',
+    @Query('alpha') alpha?: number,
+    @Query('normalize') normalize?: string,
+  ) {
+    const normalizeScore =
+      normalize === 'true' || normalize === '1'
+        ? true
+        : normalize === 'false' || normalize === '0'
+          ? false
+          : undefined;
+    const result = await this.searchBenchmarkService.runThresholdBenchmark(
+      algorithm,
+      alpha !== undefined ? Number(alpha) : undefined,
+      normalizeScore,
+    );
 
     return {
-      message: `So sánh 5 Kịch bản kiểm thử thuật toán ${algorithm} hoàn tất`,
+      message: `Đánh giá 5 cấp độ bộ lọc ngưỡng thuật toán ${algorithm} hoàn tất`,
       data: result,
     };
   }

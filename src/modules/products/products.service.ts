@@ -112,6 +112,7 @@ export class ProductsService extends BaseService<Product> {
         bookDetail: true,
         categories: true,
         authors: true,
+        albums: { media: true },
       },
     });
 
@@ -185,7 +186,7 @@ export class ProductsService extends BaseService<Product> {
     Object.assign(entity, payload);
     await this.productRepository.save(entity);
     const savedProduct = await this.findOneWithDetails(id);
-    
+
     // Gọi hàm xóa Cache chạy ngầm (không cần await để tránh làm chậm luồng trả về cho Admin)
     this.clearProductCache(savedProduct);
     return savedProduct;
@@ -444,17 +445,53 @@ export class ProductsService extends BaseService<Product> {
     const unavailableIds = productIds.filter((id) => !validIds.includes(id));
 
     return {
-      validProducts:  validProducts ? validProducts.map(p => this.mapProductToPublicResponse(p)) : [],
+      validProducts: validProducts
+        ? validProducts.map((p) => this.mapProductToPublicResponse(p))
+        : [],
       unavailableIds: unavailableIds,
     };
   }
 
   // Danh sách stop words tiếng Việt phổ biến thường gây nhiễu cho Full-Text Search
   private static readonly VIETNAMESE_STOP_WORDS = new Set([
-    'mua', 'bán', 'giá', 'cũ', 'rẻ', 'cho', 'của', 'và', 'ở', 'tại',
-    'các', 'những', 'được', 'bởi', 'với', 'là', 'có', 'trong', 'về',
-    'đến', 'từ', 'theo', 'như', 'đã', 'sẽ', 'đang', 'nào', 'gì', 'ai',
-    'sách', 'cuốn', 'quyển', 'bộ', 'tập', 'tìm', 'kiếm', 'hay', 'nhất',
+    'mua',
+    'bán',
+    'giá',
+    'cũ',
+    'rẻ',
+    'cho',
+    'của',
+    'và',
+    'ở',
+    'tại',
+    'các',
+    'những',
+    'được',
+    'bởi',
+    'với',
+    'là',
+    'có',
+    'trong',
+    'về',
+    'đến',
+    'từ',
+    'theo',
+    'như',
+    'đã',
+    'sẽ',
+    'đang',
+    'nào',
+    'gì',
+    'ai',
+    'sách',
+    'cuốn',
+    'quyển',
+    'bộ',
+    'tập',
+    'tìm',
+    'kiếm',
+    'hay',
+    'nhất',
   ]);
 
   /**
@@ -463,7 +500,10 @@ export class ProductsService extends BaseService<Product> {
    * 2. Lọc bỏ stop words tiếng Việt
    * 3. Dùng toán tử & (AND) làm mỏ neo chính xác để chặn đứng từ khóa rác lọt vào
    */
-  private buildCleanFtsQuery(searchQuery: string, useOr: boolean = false): string {
+  private buildCleanFtsQuery(
+    searchQuery: string,
+    useOr: boolean = false,
+  ): string {
     const sanitized = searchQuery
       .trim()
       .toLowerCase()
@@ -490,14 +530,17 @@ export class ProductsService extends BaseService<Product> {
     options?: {
       alpha?: number;
       threshold?: number;
+      minScore?: number;
       normalizeScore?: boolean;
       useOrOperator?: boolean;
     },
   ) {
-    const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.6;
+    const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.7;
     const ftsWeight = Number((1 - alpha).toFixed(2));
     const threshold =
-      options?.threshold !== undefined ? Number(options.threshold) : 1.2;
+      options?.threshold !== undefined ? Number(options.threshold) : 1.15;
+    const minScore =
+      options?.minScore !== undefined ? Number(options.minScore) : 0.25;
     const normalizeScore = options?.normalizeScore ?? false;
 
     // 1. Tạo Vector và FTS Query (Đã lọc stop words & dùng toán tử &)
@@ -524,8 +567,8 @@ export class ProductsService extends BaseService<Product> {
       alpha === 0
         ? `${ftsExpr}`
         : alpha === 1
-        ? `${aiExpr}`
-        : `(${alpha} * ${aiExpr}) + (${ftsWeight} * ${ftsExpr})`;
+          ? `${aiExpr}`
+          : `(${alpha} * ${aiExpr}) + (${ftsWeight} * ${ftsExpr})`;
 
     const rawResults = await this.productRepository
       .createQueryBuilder('product')
@@ -538,7 +581,9 @@ export class ProductsService extends BaseService<Product> {
         new Brackets((qb) => {
           if (alpha === 0) {
             // 100% FTS
-            qb.where("product.document_with_weights @@ to_tsquery('simple', :ftsQuery)");
+            qb.where(
+              "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
+            );
           } else if (alpha === 1) {
             // 100% Vector AI
             qb.where(`product.embedding <-> :embedding < ${threshold}`);
@@ -555,10 +600,18 @@ export class ProductsService extends BaseService<Product> {
       .limit(limit)
       .getRawMany();
 
-    if (rawResults.length === 0) return [];
+    // Lọc theo ngưỡng điểm tối thiểu (minScore)
+    let filteredResults = rawResults;
+    if (minScore !== undefined) {
+      filteredResults = filteredResults.filter(
+        (r) => parseFloat(r.final_score) >= minScore,
+      );
+    }
+
+    if (filteredResults.length === 0) return [];
 
     // Trích xuất mảng ID
-    const productIds = rawResults.map((r) => r.id);
+    const productIds = filteredResults.map((r) => r.id);
 
     // ==========================================
     // BƯỚC 2: KÉO DỮ LIỆU QUAN HỆ (BỎ EMBEDDING)
@@ -586,7 +639,7 @@ export class ProductsService extends BaseService<Product> {
     // ==========================================
     // BƯỚC 3: MAPPING THÀNH DTO ẢO
     // ==========================================
-    const formattedProducts = rawResults
+    const formattedProducts = filteredResults
       .map((raw) => {
         const p = products.find((prod) => prod.id === raw.id);
         if (!p) return null;
@@ -602,7 +655,14 @@ export class ProductsService extends BaseService<Product> {
           soldCount: p.soldCount,
           categories:
             p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
-          authors: p.authors?.map((a) => ({ id: a.id, name: a.name, slug: a.slug, describe: a.describe, avatarUrl: a.avatar?.fileUrl })) || [],
+          authors:
+            p.authors?.map((a) => ({
+              id: a.id,
+              name: a.name,
+              slug: a.slug,
+              describe: a.describe,
+              avatarUrl: a.avatar?.fileUrl,
+            })) || [],
           albums:
             p.albums
               ?.map((al) => ({
@@ -627,14 +687,17 @@ export class ProductsService extends BaseService<Product> {
     options?: {
       alpha?: number;
       threshold?: number;
+      minScore?: number;
       normalizeScore?: boolean;
       useOrOperator?: boolean;
     },
   ) {
-    const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.6;
+    const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.7;
     const ftsWeight = Number((1 - alpha).toFixed(2));
     const threshold =
-      options?.threshold !== undefined ? Number(options.threshold) : 0.6;
+      options?.threshold !== undefined ? Number(options.threshold) : 0.65;
+    const minScore =
+      options?.minScore !== undefined ? Number(options.minScore) : 0.25;
     const normalizeScore = options?.normalizeScore ?? false;
 
     // 1. Tạo Vector và FTS Query (Đã lọc stop words & dùng toán tử &)
@@ -658,8 +721,8 @@ export class ProductsService extends BaseService<Product> {
       alpha === 0
         ? `${ftsExpr}`
         : alpha === 1
-        ? `${aiExpr}`
-        : `(${alpha} * ${aiExpr}) + (${ftsWeight} * ${ftsExpr})`;
+          ? `${aiExpr}`
+          : `(${alpha} * ${aiExpr}) + (${ftsWeight} * ${ftsExpr})`;
 
     const rawResults = await this.productRepository
       .createQueryBuilder('product')
@@ -672,7 +735,9 @@ export class ProductsService extends BaseService<Product> {
         new Brackets((qb) => {
           if (alpha === 0) {
             // 100% FTS
-            qb.where("product.document_with_weights @@ to_tsquery('simple', :ftsQuery)");
+            qb.where(
+              "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
+            );
           } else if (alpha === 1) {
             // 100% Vector AI
             qb.where(`product.embedding <=> :embedding < ${threshold}`);
@@ -689,10 +754,18 @@ export class ProductsService extends BaseService<Product> {
       .limit(limit)
       .getRawMany();
 
-    if (rawResults.length === 0) return [];
+    // Lọc theo ngưỡng điểm tối thiểu (minScore)
+    let filteredResults = rawResults;
+    if (minScore !== undefined) {
+      filteredResults = filteredResults.filter(
+        (r) => parseFloat(r.final_score) >= minScore,
+      );
+    }
+
+    if (filteredResults.length === 0) return [];
 
     // Trích xuất mảng ID từ kết quả thô
-    const productIds = rawResults.map((r) => r.id);
+    const productIds = filteredResults.map((r) => r.id);
 
     // ==========================================
     // BƯỚC 2: KÉO DỮ LIỆU ĐẦY ĐỦ KÈM QUAN HỆ (BỎ EMBEDDING)
@@ -721,7 +794,7 @@ export class ProductsService extends BaseService<Product> {
     // BƯỚC 3: MAPPING THÀNH DTO ẢO CHO FRONTEND
     // ==========================================
     // Phải map lại vì lệnh .find() của TypeORM không giữ đúng thứ tự orderBy điểm số của Bước 1
-    const formattedProducts = rawResults
+    const formattedProducts = filteredResults
       .map((raw) => {
         const p = products.find((prod) => prod.id === raw.id);
         if (!p) return null;
@@ -738,7 +811,14 @@ export class ProductsService extends BaseService<Product> {
           // Ép dữ liệu relations gọn gàng lại cho FE dễ dùng
           categories:
             p.categories?.map((c) => ({ id: c.id, name: c.name })) || [],
-          authors: p.authors?.map((a) => ({ id: a.id, name: a.name, slug: a.slug, describe: a.describe, avatarUrl: a.avatar?.fileUrl })) || [],
+          authors:
+            p.authors?.map((a) => ({
+              id: a.id,
+              name: a.name,
+              slug: a.slug,
+              describe: a.describe,
+              avatarUrl: a.avatar?.fileUrl,
+            })) || [],
           // Lấy danh sách ảnh và đẩy ảnh isDefault lên đầu tiên
           albums:
             p.albums
@@ -809,35 +889,43 @@ export class ProductsService extends BaseService<Product> {
       soldCount: product.soldCount,
       createdAt: product.createdAt,
 
-      categories: product.categories?.map((c) => ({
-        id: c.id,
-        name: c.name,
-        slug: c.slug,
-      })) || [],
+      categories:
+        product.categories?.map((c) => ({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+        })) || [],
 
-      authors: product.authors?.map((a) => ({
-        id: a.id,
-        name: a.name,
-        slug: a.slug,
-        describe: a.describe,
-        avatarUrl: a.avatar?.fileUrl || null,
-      })) || [],
+      authors:
+        product.authors?.map((a) => ({
+          id: a.id,
+          name: a.name,
+          slug: a.slug,
+          describe: a.describe,
+          avatarUrl: a.avatar?.fileUrl || null,
+        })) || [],
 
-      albums: product.albums?.map((al) => ({
-        displayOrder: al.displayOrder,
-        imageUrl: al.media?.fileUrl || null,
-        altText: al.media?.altText || null,
-      })).sort((a, b) => Number(a.displayOrder) - Number(b.displayOrder)) || [],
+      albums:
+        product.albums
+          ?.map((al) => ({
+            displayOrder: al.displayOrder,
+            imageUrl: al.media?.fileUrl || null,
+            altText: al.media?.altText || null,
+          }))
+          .sort((a, b) => Number(a.displayOrder) - Number(b.displayOrder)) ||
+        [],
 
-      bookDetail: product.bookDetail ? {
-        title: product.bookDetail.title,
-        describe: product.bookDetail.describe,
-        publisher: product.bookDetail.publisher,
-        publishYear: product.bookDetail.publishYear,
-        language: product.bookDetail.language,
-        format: product.bookDetail.format,
-        pageCount: product.bookDetail.pageCount,
-      } : null,
+      bookDetail: product.bookDetail
+        ? {
+            title: product.bookDetail.title,
+            describe: product.bookDetail.describe,
+            publisher: product.bookDetail.publisher,
+            publishYear: product.bookDetail.publishYear,
+            language: product.bookDetail.language,
+            format: product.bookDetail.format,
+            pageCount: product.bookDetail.pageCount,
+          }
+        : null,
 
       reviews: approvedReviews.map((r) => ({
         id: r.id,
