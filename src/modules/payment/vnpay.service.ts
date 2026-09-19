@@ -37,7 +37,10 @@ export class VnpayService {
       const currentKey = str[key];
       const val = obj[currentKey];
       if (val !== undefined && val !== null && val !== '') {
-        sorted[currentKey] = encodeURIComponent(String(val)).replace(/%20/g, '+');
+        sorted[currentKey] = encodeURIComponent(String(val)).replace(
+          /%20/g,
+          '+',
+        );
       }
     }
     return sorted;
@@ -60,7 +63,7 @@ export class VnpayService {
       'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html';
     const returnUrl =
       this.configService.get<string>('VNPAY_RETURN_URL') ||
-      'https://witty-buckets-wink.loca.lt/apis/v1/payment/vnpay/return';
+      'http://localhost:1234/apis/v1/payment/vnpay/return';
 
     const createDate = this.formatVnpayDate();
     const amount = Math.round(Number(order.finalAmount || 0) * 100);

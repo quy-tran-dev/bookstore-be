@@ -20,6 +20,7 @@ import { StatusReview } from '@app/common/enums/status-review.enum';
 import { ProductAlbum } from './entities/product-album.entity';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
+import { v7 as uuidv7 } from 'uuid';
 @Injectable()
 export class ProductsService extends BaseService<Product> {
   private readonly logger = new Logger(ProductsService.name);
@@ -80,6 +81,16 @@ export class ProductsService extends BaseService<Product> {
     }
 
     const payload = this.formatRelationData(data);
+
+    if (payload.albums && Array.isArray(payload.albums)) {
+      payload.albums = payload.albums.map((item: any) => {
+        const albumEntity = new ProductAlbum();
+        albumEntity.id = uuidv7();
+        albumEntity.displayOrder = item.displayOrder;
+        albumEntity.media = item.media;
+        return albumEntity;
+      });
+    }
 
     // 2. GỌI HÀM AI DÙNG CHUNG
     const aiData = await this.generateEmbeddingAndSeoKeywords(
@@ -166,27 +177,26 @@ export class ProductsService extends BaseService<Product> {
       payload.bookDetail.id = entity.bookDetail.id;
     }
 
-    if (payload.albums && entity.albums) {
-      payload.albums = payload.albums.map((newAlbum) => {
+    if (payload.albums && Array.isArray(payload.albums)) {
+      const existingAlbums = entity.albums || [];
+      payload.albums = payload.albums.map((newAlbum: any) => {
         // Tìm xem ảnh này đã tồn tại trong DB chưa (dựa vào mediaId)
-        const existingAlbum = entity.albums?.find(
-          (oldAlbum) => oldAlbum.media?.id === newAlbum.media.id,
+        const existingAlbum = existingAlbums.find(
+          (oldAlbum) => oldAlbum.media?.id === newAlbum.media?.id,
         );
 
-        // Nếu ảnh đã có, gắn lại ID cũ để TypeORM hiểu là đang Update
-        if (existingAlbum) {
-          return { ...newAlbum, id: existingAlbum.id };
-        }
-
-        // Nếu là ảnh mới thêm vào, cứ giữ nguyên (TypeORM sẽ tự động Insert)
-        return Object.assign(new ProductAlbum(), newAlbum);
+        const albumEntity = new ProductAlbum();
+        albumEntity.id = existingAlbum ? existingAlbum.id : uuidv7();
+        albumEntity.displayOrder = newAlbum.displayOrder;
+        albumEntity.media = newAlbum.media;
+        return albumEntity;
       });
     }
 
     Object.assign(entity, payload);
     await this.productRepository.save(entity);
     const savedProduct = await this.findOneWithDetails(id);
-
+    
     // Gọi hàm xóa Cache chạy ngầm (không cần await để tránh làm chậm luồng trả về cho Admin)
     this.clearProductCache(savedProduct);
     return savedProduct;

@@ -91,7 +91,7 @@ export class AuthController {
   @UseGuards(AuthGuard('google'))
   async googleAuthRedirect(
     @Req() req: any,
-    @Res({ passthrough: true }) res: Response,
+    @Res() res: Response,
   ) {
     const { accessToken, refreshToken, isNewUser, email } = await this.authService.googleLogin(req.user);
     this.setRefreshTokenCookie(res, refreshToken);
@@ -105,8 +105,8 @@ export class AuthController {
       );
     }
 
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL');
-    res.redirect(`${frontendUrl}/auth/success?token=${accessToken}`);
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+    return res.redirect(`${frontendUrl}/auth/success?token=${accessToken}`);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -122,8 +122,31 @@ export class AuthController {
   }
 
   // ==========================================
-  // WEBAUTHN & QUÊN MẬT KHẨU
+  // WEBAUTHN (PASSKEYS / SINH TRẮC HỌC)
   // ==========================================
+  @UseGuards(JwtAuthGuard)
+  @Post('webauthn/register-options')
+  async getRegisterOptions(@Req() req: any) {
+    return this.authService.getRegisterChallenge(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('webauthn/register-verify')
+  async verifyRegister(@Req() req: any, @Body() body: any) {
+    const { registrationResponse, challenge } = body;
+    return this.authService.verifyRegister(
+      req.user.id,
+      registrationResponse,
+      challenge,
+    );
+  }
+
+  @Post('webauthn/login-challenge')
+  async getLoginChallenge(@Body('email') email: string) {
+    if (!email) throw new BadRequestException('Email không được để trống');
+    return this.authService.getLoginChallenge(email);
+  }
+
   @Post('webauthn/login-verify')
   async verifyLogin(
     @Body() body: any,
