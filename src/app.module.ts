@@ -21,6 +21,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { SeoAuditModule } from './modules/seo-audit/seo-audit.module';
 import { CacheModule } from '@nestjs/cache-manager';
 
 const INLINE_IMAGE_EXTENSIONS = new Set([
@@ -90,6 +91,7 @@ const INLINE_IMAGE_EXTENSIONS = new Set([
     ReviewsModule,
     PaymentModule,
     AnalyticsModule,
+    SeoAuditModule,
   ],
   controllers: [AppController],
   providers,
