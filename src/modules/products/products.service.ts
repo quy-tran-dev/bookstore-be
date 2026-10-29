@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ConflictException,
   Inject,
   Logger,
 } from '@nestjs/common';
@@ -18,6 +19,8 @@ import { MediaFolder } from '@app/common/enums/media-folder.enum';
 import { StatusProduct } from '@app/common/enums/status-product.enum';
 import { StatusReview } from '@app/common/enums/status-review.enum';
 import { ProductAlbum } from './entities/product-album.entity';
+import { SectionSanitizeUtil } from './utils/section-sanitize.util';
+import { SectionDiffUtil } from './utils/section-diff.util';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { v7 as uuidv7 } from 'uuid';
@@ -82,6 +85,27 @@ export class ProductsService extends BaseService<Product> {
 
     const payload = this.formatRelationData(data);
 
+    // Chuẩn hóa và lọc mã độc (XSS/Script) cho bookDetail & sections trước khi lưu
+    if (payload.bookDetail) {
+      if (
+        payload.bookDetail.sections &&
+        Array.isArray(payload.bookDetail.sections)
+      ) {
+        payload.bookDetail.sections = SectionSanitizeUtil.sanitizeSections(
+          payload.bookDetail.sections,
+        );
+      }
+      if (typeof payload.bookDetail.describe === 'string') {
+        payload.bookDetail.describe = SectionSanitizeUtil.sanitizeText(
+          payload.bookDetail.describe,
+        );
+      }
+      if (currentUserId) {
+        payload.bookDetail.lastModifiedBy = currentUserId;
+      }
+      delete payload.bookDetail.expectedVersion;
+    }
+
     if (payload.albums && Array.isArray(payload.albums)) {
       payload.albums = payload.albums.map((item: any) => {
         const albumEntity = new ProductAlbum();
@@ -92,10 +116,10 @@ export class ProductsService extends BaseService<Product> {
       });
     }
 
-    // 2. GỌI HÀM AI DÙNG CHUNG
+    // 2. GỌI HÀM AI DÙNG CHUNG (Dùng shortDescribe ngắn gọn thay vì describe chi tiết)
     const aiData = await this.generateEmbeddingAndSeoKeywords(
       data.name,
-      data.bookDetail?.description,
+      data.shortDescribe,
       data.categoryIds,
     );
     payload.seoKeywords = aiData.seoKeywords;
@@ -129,6 +153,54 @@ export class ProductsService extends BaseService<Product> {
 
     if (!entity) throw new NotFoundException('Không tìm thấy sản phẩm');
 
+    // KIỂM TRA XUNG ĐỘT PHIÊN BẢN (Optimistic Concurrency Control) CHO BOOK DETAIL / SECTIONS
+    if (
+      data.bookDetail &&
+      data.bookDetail.expectedVersion !== undefined &&
+      entity.bookDetail &&
+      entity.bookDetail.version !== data.bookDetail.expectedVersion
+    ) {
+      const diffResult = SectionDiffUtil.computeDiff(
+        entity.bookDetail.sections || [],
+        data.bookDetail.sections || [],
+        {
+          currentVersion: entity.bookDetail.version ?? 1,
+          expectedVersion: data.bookDetail.expectedVersion,
+          lastModifiedBy: entity.bookDetail.lastModifiedBy,
+          lastModifiedAt: entity.bookDetail.updatedAt,
+        },
+      );
+
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        message:
+          'Dữ liệu đã được người khác chỉnh sửa trước đó. Vui lòng đối chiếu các thay đổi để tránh ghi đè mất thông tin.',
+        conflictData: diffResult,
+      });
+    }
+
+    // Lọc mã độc (XSS/Script) cho bookDetail & sections trước khi lưu
+    if (payload.bookDetail) {
+      if (
+        payload.bookDetail.sections &&
+        Array.isArray(payload.bookDetail.sections)
+      ) {
+        payload.bookDetail.sections = SectionSanitizeUtil.sanitizeSections(
+          payload.bookDetail.sections,
+        );
+      }
+      if (typeof payload.bookDetail.describe === 'string') {
+        payload.bookDetail.describe = SectionSanitizeUtil.sanitizeText(
+          payload.bookDetail.describe,
+        );
+      }
+      if (currentUserId) {
+        payload.bookDetail.lastModifiedBy = currentUserId;
+      }
+      delete payload.bookDetail.expectedVersion;
+    }
+
     // 1. TỐI ƯU UPDATE: Nếu có cập nhật album thì move hàng loạt ảnh mới luôn
     if (data.albums && Array.isArray(data.albums)) {
       const mediaIds = data.albums
@@ -147,17 +219,19 @@ export class ProductsService extends BaseService<Product> {
 
     if (currentUserId) payload.updateBy = currentUserId;
 
-    // 2. LOGIC UPDATE AI VECTOR
+    // 2. LOGIC UPDATE AI VECTOR (Dựa trên name, shortDescribe và categoryIds)
     const isNameChanged = data.name && data.name !== entity.name;
-    const isDescChanged =
-      data.bookDetail?.description &&
-      data.bookDetail?.description !== entity.bookDetail?.describe;
+    const isShortDescChanged =
+      data.shortDescribe !== undefined &&
+      data.shortDescribe !== entity.shortDescribe;
     const isCategoriesChanged = data.categoryIds !== undefined;
 
-    if (isNameChanged || isDescChanged || isCategoriesChanged) {
+    if (isNameChanged || isShortDescChanged || isCategoriesChanged) {
       const finalName = data.name || entity.name;
-      const finalDesc =
-        data.bookDetail?.description || entity.bookDetail?.describe;
+      const finalShortDesc =
+        data.shortDescribe !== undefined
+          ? data.shortDescribe
+          : entity.shortDescribe;
       const finalCategoryIds =
         data.categoryIds ||
         (entity.categories ? entity.categories.map((c) => c.id) : []);
@@ -165,7 +239,7 @@ export class ProductsService extends BaseService<Product> {
       // GỌI LẠI HÀM AI
       const aiData = await this.generateEmbeddingAndSeoKeywords(
         finalName,
-        finalDesc,
+        finalShortDesc,
         finalCategoryIds,
       );
       payload.seoKeywords = aiData.seoKeywords;
@@ -174,7 +248,10 @@ export class ProductsService extends BaseService<Product> {
 
     // 3. Gộp và lưu
     if (payload.bookDetail && entity.bookDetail) {
-      payload.bookDetail.id = entity.bookDetail.id;
+      payload.bookDetail = Object.assign(
+        entity.bookDetail,
+        payload.bookDetail,
+      );
     }
 
     if (payload.albums && Array.isArray(payload.albums)) {
@@ -929,6 +1006,7 @@ export class ProductsService extends BaseService<Product> {
         ? {
             title: product.bookDetail.title,
             describe: product.bookDetail.describe,
+            sections: product.bookDetail.sections || [],
             publisher: product.bookDetail.publisher,
             publishYear: product.bookDetail.publishYear,
             language: product.bookDetail.language,

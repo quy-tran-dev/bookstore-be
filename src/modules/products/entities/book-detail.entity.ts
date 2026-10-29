@@ -1,6 +1,7 @@
-import { Entity, Column, OneToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, OneToOne, JoinColumn, VersionColumn } from 'typeorm';
 import { BaseEntity } from '@app/common/base/base.entity';
 import { Product } from './product.entity';
+import { SectionBlock } from '../interfaces/section.interface';
 
 @Entity('book_details')
 export class BookDetail extends BaseEntity {
@@ -27,7 +28,15 @@ export class BookDetail extends BaseEntity {
 
   // Khối nội dung chi tiết theo Section (Block-based: H1/H2/H3, p, image, video, list, style)
   @Column({ type: 'jsonb', nullable: true })
-  sections?: Record<string, any>[];
+  sections?: SectionBlock[];
+
+  // Quản lý phiên bản để xử lý xung đột sửa đổi (Optimistic Locking)
+  @VersionColumn({ default: 1 })
+  version?: number;
+
+  // Lưu vết ID người cập nhật gần nhất
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  lastModifiedBy?: string;
 
   // Quan hệ 1-1 trỏ về bảng Product chính
   @OneToOne(() => Product, (product) => product.bookDetail, { onDelete: 'CASCADE' })

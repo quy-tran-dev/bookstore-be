@@ -15,13 +15,21 @@ import { CategoriesModule } from './modules/categories/categories.module';
 import { ProductsModule } from './modules/products/products.module';
 import { MediaModule } from './modules/media/media.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'path';
+import { extname, join } from 'path';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { CacheModule } from '@nestjs/cache-manager';
+
+const INLINE_IMAGE_EXTENSIONS = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.gif',
+  '.webp',
+]);
 
 @Module({
   imports: [
@@ -32,13 +40,26 @@ import { CacheModule } from '@nestjs/cache-manager';
       rootPath: join(__dirname, '..', 'public'),
       serveRoot: '/',
       serveStaticOptions: {
-        setHeaders: (res) => {
+        dotfiles: 'ignore',
+        index: false,
+        setHeaders: (res, filePath: string) => {
           // Lấy Domain FE từ file .env
-          const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3001';
-          
+          const allowedOrigin =
+            process.env.FRONTEND_URL || 'http://localhost:3001';
+
           res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
           res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
           res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
+          // Header chống thực thi mã độc cho mọi file được serve từ public/uploads
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Content-Security-Policy', "default-src 'none'");
+
+          // Chỉ cho phép các định dạng ảnh an toàn hiển thị inline; các định dạng khác ép tải về (attachment)
+          const ext = extname(filePath || '').toLowerCase();
+          if (!INLINE_IMAGE_EXTENSIONS.has(ext)) {
+            res.setHeader('Content-Disposition', 'attachment');
+          }
         },
       },
     }),

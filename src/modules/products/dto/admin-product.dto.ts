@@ -5,6 +5,7 @@ import {
 import { Type } from 'class-transformer';
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateProductAlbumDto } from '@app/modules/media/dto/admin-media.dto';
+import { SectionBlock } from '../interfaces/section.interface';
 
 export class CreateBookDetailDto {
   @IsString()
@@ -13,7 +14,7 @@ export class CreateBookDetailDto {
 
   @IsString()
   @IsOptional()
-  describe?: string;
+  describe?: string; // Giữ lại để tương thích ngược
 
   @IsString()
   @IsOptional()
@@ -35,6 +36,16 @@ export class CreateBookDetailDto {
   @Min(1)
   @IsOptional()
   pageCount?: number;
+
+  // Danh sách các khối nội dung chi tiết dạng Section (Block-based: H1/H2/H3, p, image, video, list, style)
+  @IsArray()
+  @IsOptional()
+  sections?: SectionBlock[];
+
+  // Phiên bản kỳ vọng để kiểm soát xung đột sửa đổi (Optimistic Locking)
+  @IsNumber()
+  @IsOptional()
+  expectedVersion?: number;
 }
 
 export class CreateProductDto {
@@ -102,7 +113,7 @@ export class CreateProductDto {
   @ValidateNested()
   @Type(() => CreateProductAlbumDto)
   @IsOptional()
-  albums?: CreateProductAlbumDto[]
+  albums?: CreateProductAlbumDto[];
 }
 
 export class UpdateProductDto extends PartialType(CreateProductDto) {}
