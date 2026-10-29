@@ -8,7 +8,7 @@ export class BookDetail extends BaseEntity {
   title?: string; // Tên hiển thị chi tiết hoặc tiêu đề gốc
 
   @Column({ type: 'text', nullable: true })
-  describe?: string; // Bài viết mô tả chi tiết
+  describe?: string; // Bài viết mô tả chi tiết (giữ nguyên để tương thích ngược)
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   publisher?: string; // Nhà xuất bản
@@ -24,6 +24,10 @@ export class BookDetail extends BaseEntity {
 
   @Column({ type: 'int', nullable: true })
   pageCount?: number; // Số trang
+
+  // Khối nội dung chi tiết theo Section (Block-based: H1/H2/H3, p, image, video, list, style)
+  @Column({ type: 'jsonb', nullable: true })
+  sections?: Record<string, any>[];
 
   // Quan hệ 1-1 trỏ về bảng Product chính
   @OneToOne(() => Product, (product) => product.bookDetail, { onDelete: 'CASCADE' })
