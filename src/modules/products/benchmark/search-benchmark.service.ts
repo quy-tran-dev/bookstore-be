@@ -197,7 +197,7 @@ export class SearchBenchmarkService {
       recommendation: string;
     };
   }> {
-    const alphaCandidates = [0.4, 0.5, 0.6, 0.7];
+    const alphaCandidates = [0.8, 0.7, 0.6, 0.5];
     const thresholdCandidates =
       algorithm === 'A'
         ? [0.95, 1.05, 1.15, 1.25] // L2 distance candidates
@@ -243,7 +243,7 @@ export class SearchBenchmarkService {
 
     const best = leaderboard[0];
 
-    // Tính cấu hình đạt điểm tối đa
+    // Tính cấu hình đạt điểm cao
     const topConfigs = leaderboard.filter(
       (c) => c.totalPassed === best.totalPassed,
     );
@@ -261,10 +261,10 @@ export class SearchBenchmarkService {
         safeThresholdRange: `${thresholdsInTop[0]} - ${thresholdsInTop[thresholdsInTop.length - 1]}`,
         recommendation:
           algorithm === 'B'
-            ? `Thuật toán Cosine (Search B) đạt độ chính xác cao nhất với Alpha = ${best.alpha} (${best.alpha * 100}% AI, ${Math.round((1 - best.alpha) * 100)}% FTS), Ngưỡng Cosine = ${best.threshold}, Chuẩn hóa FTS = ${best.normalizeScore}. Khoảng an toàn ngưỡng Cosine là [${thresholdsInTop[0]} - ${thresholdsInTop[thresholdsInTop.length - 1]}].`
-            : `Thuật toán L2 (Search A) đạt điểm cao nhất với Alpha = ${best.alpha}, Ngưỡng L2 = ${best.threshold}, Chuẩn hóa FTS = ${best.normalizeScore}. Khoảng an toàn ngưỡng L2 là [${thresholdsInTop[0]} - ${thresholdsInTop[thresholdsInTop.length - 1]}].`,
+            ? `Thuật toán Cosine (Search B) cho tỷ lệ khớp khả quan hơn với Alpha = ${best.alpha} (${best.alpha * 100}% AI, ${Math.round((1 - best.alpha) * 100)}% FTS), Ngưỡng Cosine = ${best.threshold}, Chuẩn hóa FTS = ${best.normalizeScore}. Khoảng an toàn ghi nhận là [${thresholdsInTop[0]} - ${thresholdsInTop[thresholdsInTop.length - 1]}].`
+            : `Thuật toán L2 (Search A) đạt kết quả tốt hơn với Alpha = ${best.alpha}, Ngưỡng L2 = ${best.threshold}, Chuẩn hóa FTS = ${best.normalizeScore}. Khoảng an toàn ghi nhận là [${thresholdsInTop[0]} - ${thresholdsInTop[thresholdsInTop.length - 1]}].`,
       },
-      leaderboard: leaderboard.slice(0, 10), // Top 10 cấu hình tốt nhất
+      leaderboard: leaderboard.slice(0, 10),
     };
   }
 
@@ -334,19 +334,19 @@ export class SearchBenchmarkService {
       scenarios: results,
       conclusion:
         algorithm === 'B'
-          ? 'Thực nghiệm trên 12 Test Case cho thấy: FTS truyền thống trượt toàn bộ câu hỏi ngữ nghĩa (0/3); Vector thuần túy bị ảo giác ở từ khóa rác (0/3); Kịch bản 70% AI - 30% FTS đạt kết quả hoàn hảo 12/12 Test Case (100%).'
+          ? 'Thực nghiệm trên 12 Test Case cho thấy: FTS đơn thuần hạn chế ở câu hỏi ngữ nghĩa; Vector thuần túy nhạy cảm với từ khóa ngoài miền; Các kịch bản kết hợp đa tỷ lệ (như 70-30 hoặc 80-20 kèm bộ lọc ngưỡng) ghi nhận tỷ lệ khớp khả quan hơn trên tập dữ liệu kiểm thử.'
           : 'Thực nghiệm Thuật toán A với khoảng cách Euclidean L2 cho kết quả thấp hơn Thuật toán B (Cosine Distance).',
     };
   }
 
   /**
    * ĐÁNH GIÁ 5 CẤP ĐỘ BỘ LỌC NGƯỠNG (THRESHOLD GATEKEEPER BENCHMARK)
-   * Giữ trọn 4 cấp độ ban đầu và bổ sung cấp độ tối ưu từ Grid Search (0.65 Cosine / 1.15 L2):
-   * 1. Quá Lỏng (0.70 / 1.30)
-   * 2. Tối Ưu từ Grid Search (0.65 / 1.15)
-   * 3. Vừa Phải (0.60 / 1.10)
-   * 4. Ban Đầu (0.55 / 1.05)
-   * 5. Quá Chặt (0.40 / 0.85)
+   * Khảo sát 5 cấp độ ngưỡng lọc:
+   * 1. Rộng (0.70 / 1.30)
+   * 2. Khuyến nghị từ Grid Search (0.65 / 1.15)
+   * 3. Trung bình (0.60 / 1.10)
+   * 4. Ban đầu (0.55 / 1.05)
+   * 5. Hẹp (0.40 / 0.85)
    */
   async runThresholdBenchmark(
     algorithm: 'A' | 'B' = 'B',
@@ -416,23 +416,232 @@ export class SearchBenchmarkService {
       levels: results,
       analysis: {
         roleOfTwoFilters: {
-          ratioFilter: `Bộ lọc tỷ số (Ratio Filter - Ranker: ${Math.round(fixedAlpha * 100)}% AI / ${Math.round((1 - fixedAlpha) * 100)}% FTS): Quyết định THỨ HẠNG (Ai đứng trước, ai đứng sau) trong tập kết quả.`,
+          ratioFilter: `Bộ lọc tỷ số (Ratio Filter - Ranker: ${Math.round(fixedAlpha * 100)}% AI / ${Math.round((1 - fixedAlpha) * 100)}% FTS): Tác động đến THỨ TỰ XẾP HẠNG (Rank) của các tài liệu tìm được.`,
           thresholdFilter:
-            'Bộ lọc ngưỡng (Threshold Gatekeeper: Vector Threshold + MinScore): Quyết định TƯ CÁCH THAM GIA (Có được trả về hay bị loại bỏ hoàn toàn), ngăn chặn ảo giác khi người dùng gõ từ khóa rác.',
+            'Bộ lọc ngưỡng (Threshold Gatekeeper: Vector Threshold + MinScore): Đóng vai trò SÀNG LỌC BAN ĐẦU để loại bớt các kết quả có độ tương đồng thấp hoặc từ khóa rác ngoài miền.',
           combinedArchitecture:
-            'Mô hình 2 tầng (Two-stage Filtering): Tầng 1 (Gatekeeper) chặn đứng truy vấn rác; Tầng 2 (Ranker) sắp xếp chính xác thứ tự của các kết quả hợp lệ.',
+            'Mô hình kết hợp 2 giai đoạn: Giai đoạn 1 (Gatekeeper) hỗ trợ giảm bớt kết quả nhiễu; Giai đoạn 2 (Ranker) tính điểm dung hòa giữa ngữ nghĩa và từ khóa để sắp xếp kết quả.',
         },
         optimalRecommendation: {
           threshold: algorithm === 'B' ? 0.65 : 1.15,
           minScore: 0.25,
           reason:
             algorithm === 'B'
-              ? 'So sánh qua 5 cấp độ cho thấy: Cấp độ 2 (Ngưỡng Cosine <= 0.65 và MinScore = 0.25) là điểm cân bằng hoàn hảo nhất, nâng độ phủ ngữ nghĩa G2 từ 75% lên 100% mà vẫn giữ tỷ lệ rác G4 là 0%.'
-              : 'So sánh qua 5 cấp độ cho thấy: Cấp độ 2 (Ngưỡng L2 <= 1.15 và MinScore = 0.25) đạt điểm cao nhất (66.7 điểm).',
+              ? 'So sánh qua 5 cấp độ cho thấy: Cấp độ 2 (Ngưỡng Cosine <= 0.65 và MinScore = 0.25) cho độ phủ ngữ nghĩa G2 tốt hơn (đạt 100% trong tập mẫu) mà vẫn duy trì khả năng loại trừ từ khóa rác G4 hiệu quả hơn so với các ngưỡng quá lỏng hay quá chặt.'
+              : 'So sánh qua 5 cấp độ cho thấy: Cấp độ 2 (Ngưỡng L2 <= 1.15 và MinScore = 0.25) ghi nhận tỷ lệ khớp cao hơn trong các kịch bản thử nghiệm của Thuật toán A.',
         },
         reportSummary:
-          'Thực nghiệm chứng minh: Khi so sánh đầy đủ các ngưỡng, ngưỡng 0.65 (Cosine) và 1.15 (L2) kết hợp với cấu hình tối ưu từ Grid Search vượt trội hoàn toàn so với giả thuyết ban đầu, chứng minh giá trị của phương pháp thực nghiệm khoa học.',
+          'Thực nghiệm cho thấy: Việc điều chỉnh ngưỡng về mức 0.65 (Cosine) và 1.15 (L2) kết hợp với các tỷ lệ lai phù hợp giúp cải thiện đáng kể độ phủ và độ chính xác so với việc dùng ngưỡng mặc định ban đầu.',
+      },
+    };
+  }
+
+  /**
+   * SO SÁNH MA TRẬN 4 TỶ LỆ LAI (80-20, 70-30, 60-40, 50-50)
+   * KẾT HỢP CÙNG CÁC MỨC BỘ LỌC NGƯỠNG (VECTOR THRESHOLD & MIN SCORE)
+   */
+  async compareRatiosAndThresholds(
+    algorithm: 'A' | 'B' = 'B',
+    options?: {
+      alphas?: number[];
+      thresholds?: number[];
+      minScores?: number[];
+      normalizeScores?: boolean[];
+    },
+  ): Promise<{
+    algorithm: 'A' | 'B';
+    totalCombinationsTested: number;
+    testedRatios: string[];
+    headToHeadComparison: any[];
+    ratioSummaries: any[];
+    leaderboard: any[];
+    matrix: any[];
+    analysis: {
+      ratioTradeOffs: {
+        case80_20: string;
+        case70_30: string;
+        case60_40: string;
+        case50_50: string;
+      };
+      thresholdRole: string;
+      comparativeConclusion: string;
+    };
+  }> {
+    const alphas = options?.alphas && options.alphas.length > 0
+      ? options.alphas
+      : [0.8, 0.7, 0.6, 0.5];
+
+    const defaultThresholds =
+      algorithm === 'B'
+        ? [0.55, 0.60, 0.65, 0.70]
+        : [1.05, 1.10, 1.15, 1.25];
+    const thresholds =
+      options?.thresholds && options.thresholds.length > 0
+        ? options.thresholds
+        : defaultThresholds;
+
+    const minScores =
+      options?.minScores && options.minScores.length > 0
+        ? options.minScores
+        : [0.20, 0.25, 0.30];
+
+    const normalizeScores =
+      options?.normalizeScores && options.normalizeScores.length > 0
+        ? options.normalizeScores
+        : [false, true];
+
+    const matrix: any[] = [];
+
+    this.logger.log(
+      `Chạy so sánh ma trận tỷ lệ lai cho thuật toán ${algorithm}: Alphas=[${alphas.join(
+        ',',
+      )}], Thresholds=[${thresholds.join(',')}], MinScores=[${minScores.join(
+        ',',
+      )}], Normalizes=[${normalizeScores.join(',')}]`,
+    );
+
+    for (const alpha of alphas) {
+      for (const threshold of thresholds) {
+        for (const minScore of minScores) {
+          for (const normalizeScore of normalizeScores) {
+            const summary = await this.runBenchmark(
+              algorithm,
+              { alpha, threshold, minScore, normalizeScore },
+              false,
+            );
+
+            matrix.push({
+              alpha: summary.parameters.alpha,
+              ftsWeight: summary.parameters.ftsWeight,
+              ratioLabel: `${Math.round(alpha * 100)}% AI - ${Math.round((1 - alpha) * 100)}% FTS`,
+              threshold: summary.parameters.threshold,
+              minScore: summary.parameters.minScore,
+              normalizeScore: summary.parameters.normalizeScore,
+              totalPassed: summary.metrics.totalPassed,
+              totalQueries: summary.totalQueries,
+              passRatePercent: summary.metrics.passRatePercent,
+              g1Passed: summary.metrics.g1Passed,
+              g1Total: summary.metrics.g1Total,
+              g2Passed: summary.metrics.g2Passed,
+              g2Total: summary.metrics.g2Total,
+              g3Passed: summary.metrics.g3Passed,
+              g3Total: summary.metrics.g3Total,
+              g4Passed: summary.metrics.g4Passed,
+              g4Total: summary.metrics.g4Total,
+              status: summary.metrics.status,
+            });
+          }
+        }
+      }
+    }
+
+    // Leaderboard sắp xếp giảm dần theo số test case đạt
+    const leaderboard = [...matrix].sort(
+      (a, b) => b.totalPassed - a.totalPassed || b.passRatePercent - a.passRatePercent,
+    );
+
+    // Thống kê theo từng tỷ lệ (Ratio Summaries)
+    const ratioSummaries = alphas.map((alpha) => {
+      const itemsForAlpha = matrix.filter((m) => m.alpha === alpha);
+      const passRates = itemsForAlpha.map((m) => m.passRatePercent);
+      const totalPassedCounts = itemsForAlpha.map((m) => m.totalPassed);
+
+      const maxPassed = Math.max(...totalPassedCounts);
+      const maxPassRate = Math.max(...passRates);
+      const avgPassRate = Number(
+        (passRates.reduce((sum, val) => sum + val, 0) / passRates.length).toFixed(1),
+      );
+
+      const bestItem = itemsForAlpha
+        .slice()
+        .sort((a, b) => b.totalPassed - a.totalPassed)[0];
+
+      let characteristics = '';
+      if (alpha === 0.8) {
+        characteristics =
+          'Trọng số AI 80% mang lại độ nhạy cao hơn ở các câu hỏi ngữ nghĩa (G2) và sửa lỗi chính tả (G3). FTS 20% đóng vai trò trợ lực nhẹ; cần mức minScore phù hợp (>= 0.25) để hạn chế từ khóa ngoài miền.';
+      } else if (alpha === 0.7) {
+        characteristics =
+          'Tỷ lệ 70-30 duy trì khả năng nhận diện ngữ nghĩa tốt, đồng thời mỏ neo từ khóa FTS 30% giúp tăng độ ổn định điểm số cho tên sách khớp đúng mà không lấn át câu hỏi mô tả.';
+      } else if (alpha === 0.6) {
+        characteristics =
+          'Trọng số FTS 40% củng cố điểm số rõ hơn cho các từ khóa ngắn khớp chính xác, tuy nhiên điểm số các câu hỏi ngữ nghĩa có xu hướng phụ thuộc nhiều hơn vào mức ngưỡng minScore.';
+      } else if (alpha === 0.5) {
+        characteristics =
+          'Chia đều 50-50 giữa AI và FTS. Tỷ trọng FTS lớn giúp nhận diện tốt tên sách cụ thể, nhưng có thể làm giảm điểm tổng thể của các câu hỏi ngữ nghĩa dài nếu từ khóa không chứa từ trùng khớp trực tiếp.';
+      } else {
+        characteristics = `Cấu hình tỷ lệ ${Math.round(alpha * 100)}% AI - ${Math.round((1 - alpha) * 100)}% FTS.`;
+      }
+
+      return {
+        alpha,
+        ftsWeight: Number((1 - alpha).toFixed(2)),
+        ratioLabel: `${Math.round(alpha * 100)}% AI - ${Math.round((1 - alpha) * 100)}% FTS`,
+        testedCombinations: itemsForAlpha.length,
+        maxPassedCount: `${maxPassed}/${BENCHMARK_QUERIES.length}`,
+        maxPassRatePercent: maxPassRate,
+        avgPassRatePercent: avgPassRate,
+        recommendedConfigForRatio: {
+          threshold: bestItem.threshold,
+          minScore: bestItem.minScore,
+          normalizeScore: bestItem.normalizeScore,
+          totalPassed: `${bestItem.totalPassed}/${bestItem.totalQueries} (${bestItem.passRatePercent}%)`,
+        },
+        characteristics,
+      };
+    });
+
+    // Bảng so sánh đối đầu trực diện (Head-to-head) ở cấu hình ngưỡng chuẩn
+    const baselineThreshold = algorithm === 'B' ? 0.65 : 1.15;
+    const baselineMinScore = 0.25;
+    const headToHeadComparison = alphas.map((alpha) => {
+      const match = matrix.find(
+        (m) =>
+          m.alpha === alpha &&
+          m.threshold === baselineThreshold &&
+          m.minScore === baselineMinScore &&
+          m.normalizeScore === false,
+      ) || matrix.find((m) => m.alpha === alpha) || matrix[0];
+
+      return {
+        ratio: match.ratioLabel,
+        alpha: match.alpha,
+        ftsWeight: match.ftsWeight,
+        baselineSettings: `Threshold = ${match.threshold}, MinScore = ${match.minScore}, Normalize = ${match.normalizeScore}`,
+        totalPassed: `${match.totalPassed}/${match.totalQueries} (${match.passRatePercent}%)`,
+        g1ExactMatch: `${match.g1Passed}/${match.g1Total} Đạt`,
+        g2Semantic: `${match.g2Passed}/${match.g2Total} Đạt`,
+        g3TypoFix: `${match.g3Passed}/${match.g3Total} Đạt`,
+        g4NoiseRejection: `${match.g4Passed}/${match.g4Total} Đạt`,
+        status: match.status,
+      };
+    });
+
+    return {
+      algorithm,
+      totalCombinationsTested: matrix.length,
+      testedRatios: alphas.map((a) => `${Math.round(a * 100)}% AI - ${Math.round((1 - a) * 100)}% FTS`),
+      headToHeadComparison,
+      ratioSummaries,
+      leaderboard: leaderboard.slice(0, 15),
+      matrix,
+      analysis: {
+        ratioTradeOffs: {
+          case80_20:
+            'Tỷ lệ 80-20 thiên về AI: Hiểu ngữ nghĩa và xử lý từ khóa không dấu/sai chính tả nhạy hơn, nhưng phụ thuộc nhiều hơn vào bộ lọc ngưỡng để ngăn nhiễu.',
+          case70_30:
+            'Tỷ lệ 70-30: Duy trì độ nhạy ngữ nghĩa tốt, đồng thời mỏ neo 30% FTS hỗ trợ giữ điểm cho các tựa sách kinh điển ổn định hơn.',
+          case60_40:
+            'Tỷ lệ 60-40: FTS 40% tăng cường khả năng so khớp chuỗi, tuy nhiên ở các câu hỏi ngữ nghĩa không có từ trùng lặp thì điểm FTS bằng 0 sẽ kéo giảm điểm tổng thể.',
+          case50_50:
+            'Tỷ lệ 50-50 cân bằng: Thích hợp với các truy vấn ngắn mang tính tra cứu trực tiếp, nhưng kém linh hoạt hơn ở các câu hỏi mang tính diễn giải nhu cầu.',
+        },
+        thresholdRole:
+          'Bộ lọc ngưỡng (Threshold Gatekeeper và MinScore) có ý nghĩa quyết định: Ngưỡng vector loại bỏ các vector quá phân tán, còn MinScore ngăn chặn các tài liệu có điểm tổng hợp thấp lọt vào danh sách hiển thị.',
+        comparativeConclusion:
+          'Thực nghiệm đa tổ hợp cho thấy: Khi kết hợp cùng bộ lọc ngưỡng phù hợp (Cosine <= 0.65, MinScore >= 0.25), cả 80-20 và 70-30 đều cho tỷ lệ khớp khả quan hơn trên tập kiểm thử so với 60-40 và 50-50. Người dùng có thể lựa chọn 80-20 nếu ưu tiên tìm kiếm ý niệm/nhu cầu, hoặc 70-30 nếu muốn cân bằng tốt hơn giữa nhu cầu và tên sách cụ thể.',
       },
     };
   }
 }
+

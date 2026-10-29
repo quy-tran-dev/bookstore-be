@@ -184,6 +184,83 @@ export class PublicProductsController {
     };
   }
 
+  /**
+   * SO SÁNH MA TRẬN 4 TỶ LỆ LAI (80-20, 70-30, 60-40, 50-50) VÀ BỘ LỌC NGƯỠNG
+   * Endpoint: GET /apis/v1/products/benchmark/compare-ratios
+   * Query params:
+   *  - algorithm: 'A' | 'B' (mặc định 'B')
+   *  - alphas: chuỗi cách nhau bởi dấu phẩy, vd: "0.8,0.7,0.6,0.5"
+   *  - thresholds: chuỗi cách nhau bởi dấu phẩy, vd: "0.55,0.60,0.65,0.70"
+   *  - minScores: chuỗi cách nhau bởi dấu phẩy, vd: "0.20,0.25,0.30"
+   *  - normalize: 'true' | 'false' | 'both' (mặc định 'both' để kiểm thử cả hai)
+   */
+  @Get('benchmark/compare-ratios')
+  @CacheTTL(0)
+  async compareRatios(
+    @Query('algorithm') algorithm: 'A' | 'B' = 'B',
+    @Query('alphas') alphas?: string,
+    @Query('thresholds') thresholds?: string,
+    @Query('minScores') minScores?: string,
+    @Query('normalize') normalize?: string,
+  ) {
+    const parsedAlphas = alphas
+      ? alphas
+          .split(',')
+          .map((v) => Number(v.trim()))
+          .filter((v) => !isNaN(v))
+      : undefined;
+
+    const parsedThresholds = thresholds
+      ? thresholds
+          .split(',')
+          .map((v) => Number(v.trim()))
+          .filter((v) => !isNaN(v))
+      : undefined;
+
+    const parsedMinScores = minScores
+      ? minScores
+          .split(',')
+          .map((v) => Number(v.trim()))
+          .filter((v) => !isNaN(v))
+      : undefined;
+
+    const normalizeScores =
+      normalize === 'true' || normalize === '1'
+        ? [true]
+        : normalize === 'false' || normalize === '0'
+          ? [false]
+          : [false, true];
+
+    const result = await this.searchBenchmarkService.compareRatiosAndThresholds(
+      algorithm,
+      {
+        alphas: parsedAlphas,
+        thresholds: parsedThresholds,
+        minScores: parsedMinScores,
+        normalizeScores,
+      },
+    );
+
+    return {
+      message: `So sánh ma trận 4 tỷ lệ lai (80-20, 70-30, 60-40, 50-50) cùng bộ lọc ngưỡng thuật toán ${algorithm} hoàn tất`,
+      data: result,
+    };
+  }
+
+  /**
+   * GRID SEARCH TỰ ĐỘNG QUÉT TOÀN BỘ LƯỚI THAM SỐ
+   * Endpoint: GET /apis/v1/products/benchmark/grid-search?algorithm=B
+   */
+  @Get('benchmark/grid-search')
+  @CacheTTL(0)
+  async runGridSearch(@Query('algorithm') algorithm: 'A' | 'B' = 'B') {
+    const result = await this.searchBenchmarkService.runGridSearch(algorithm);
+    return {
+      message: `Chạy Grid Search thuật toán ${algorithm} hoàn tất`,
+      data: result,
+    };
+  }
+
   @Get()
   // @CacheTTL(300000)
   async findAll(

@@ -9,7 +9,7 @@ export interface BenchmarkQueryItem {
 
 export const BENCHMARK_QUERIES: BenchmarkQueryItem[] = [
   // G1: EXACT MATCH (3 câu) - Khớp chính xác tên tựa sách kinh điển
-  // Kỳ vọng: FTS chiếm ưu thế tuyệt đối, sách phải xuất hiện ở Top 1
+  // Kỳ vọng: FTS phát huy ưu thế so khớp mặt chữ, sách dự kiến xuất hiện trong top kết quả
   {
     id: 1,
     query: 'Clean Code',

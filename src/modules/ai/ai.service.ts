@@ -17,11 +17,20 @@ export class AiService implements OnModuleInit {
     this.logger.log('Mô hình nhúng Vector đã sẵn sàng!');
   }
 
-  // Tạo vector 384 chiều
+  private readonly embeddingCache = new Map<string, number[]>();
+
+  // Tạo vector 384 chiều (kèm bộ nhớ đệm RAM để tối ưu tốc độ)
   async generateEmbedding(text: string): Promise<number[]> {
-    if (!this.extractor) return [];
-    const output = await this.extractor(text, { pooling: 'mean', normalize: true });
-    return Array.from(output.data);
+    if (!text || !this.extractor) return [];
+    const normalizedText = text.trim();
+    if (this.embeddingCache.has(normalizedText)) {
+      return this.embeddingCache.get(normalizedText)!;
+    }
+
+    const output = await this.extractor(normalizedText, { pooling: 'mean', normalize: true });
+    const vector = Array.from(output.data) as number[];
+    this.embeddingCache.set(normalizedText, vector);
+    return vector;
   }
 
   // Gọi Ollama LLM để bóc từ khóa
