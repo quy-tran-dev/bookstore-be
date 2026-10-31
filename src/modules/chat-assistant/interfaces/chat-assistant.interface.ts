@@ -13,7 +13,43 @@ export type ChatRole = 'user' | 'assistant';
 export type AssistantToolName =
   | 'searchBooksTool'
   | 'getBookDetailTool'
-  | 'trackOrderTool';
+  | 'trackOrderTool'
+  | 'prepareAddToCartTool'
+  | 'confirmAddToCartTool';
+
+/**
+ * Trạng thái thao tác thêm giỏ hàng nhanh qua Trợ lý AI:
+ * - AWAITING_CONFIRMATION: AI đã tìm thấy sách & kiểm tra tồn kho, đang hỏi khách xác nhận lần cuối
+ * - CONFIRMED: Khách đã chốt, trả về danh sách { productId, amount } để Frontend thêm thẳng vào giỏ hàng
+ * - CANCELLED: Khách hủy thao tác thêm vào giỏ hàng
+ */
+export type CartActionStatus =
+  | 'AWAITING_CONFIRMATION'
+  | 'CONFIRMED'
+  | 'CANCELLED';
+
+/**
+ * Thông tin từng sản phẩm và số lượng (amount) trong yêu cầu thêm giỏ hàng nhanh
+ */
+export interface ChatCartItem {
+  productId: string;
+  amount: number;
+  name: string;
+  slug: string;
+  unitPrice: number;
+  totalPrice: number;
+  stockQuantity: number;
+  thumbnailUrl?: string | null;
+}
+
+/**
+ * Dữ liệu hành động giỏ hàng gửi về cho Frontend xử lý tự động
+ */
+export interface ChatCartAction {
+  status: CartActionStatus;
+  items: ChatCartItem[];
+  totalAmount: number;
+}
 
 /**
  * Một lượt tin nhắn được lưu trong lịch sử phiên trò chuyện (Redis Cache)
@@ -69,6 +105,7 @@ export interface ToolExecutionOutcome {
   toolOutputText: string;
   suggestedProducts?: ChatSuggestedProduct[];
   referencedOrders?: ChatOrderSummary[];
+  cartAction?: ChatCartAction | null;
 }
 
 /**
@@ -80,5 +117,6 @@ export interface ChatAssistantResponse {
   usedTool?: AssistantToolName | null;
   suggestedProducts: ChatSuggestedProduct[];
   referencedOrders: ChatOrderSummary[];
+  cartAction?: ChatCartAction | null;
   timestamp: string;
 }

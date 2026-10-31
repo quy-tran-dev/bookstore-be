@@ -6,6 +6,7 @@ import { Product } from '../products/entities/product.entity';
 import { Order } from '../orders/entities/order.entity';
 import { OrderStatus } from '@app/common/enums/order-status.enum';
 import {
+  ChatCartItem,
   ChatOrderSummary,
   ChatSuggestedProduct,
   ToolExecutionOutcome,
@@ -333,6 +334,152 @@ export class ChatToolsService {
         toolName: 'trackOrderTool',
         toolOutputText: 'Không thể tra cứu đơn hàng ngay lúc này, vui lòng thử lại sau.',
         referencedOrders: [],
+      };
+    }
+  }
+
+  /**
+   * TOOL 4: Chuẩn bị danh sách sách khách muốn thêm vào giỏ hàng nhanh (Bước 1: Kiểm tra tồn kho & Hỏi xác nhận lại).
+   * Nhận mảng { slugOrName, amount }, tìm đúng sách thực tế trong DB, kiểm tra số lượng tồn kho,
+   * và trả về trạng thái AWAITING_CONFIRMATION để AI hỏi lại khách trước khi chốt.
+   */
+  async executePrepareAddToCart(args: {
+    items: { slugOrName: string; amount?: number }[];
+  }): Promise<ToolExecutionOutcome> {
+    const rawItems = Array.isArray(args.items) ? args.items : [];
+    if (rawItems.length === 0) {
+      return {
+        toolName: 'prepareAddToCartTool',
+        toolOutputText:
+          'Chưa xác định được cuốn sách và số lượng mà khách hàng muốn thêm vào giỏ hàng.',
+        cartAction: null,
+      };
+    }
+
+    try {
+      const preparedItems: ChatCartItem[] = [];
+      const suggestedProducts: ChatSuggestedProduct[] = [];
+      const outOfStockNames: string[] = [];
+
+      for (const reqItem of rawItems) {
+        const keyword = (reqItem.slugOrName || '').trim();
+        if (!keyword) continue;
+
+        const requestedAmount = Math.max(1, Math.round(Number(reqItem.amount || 1)));
+
+        // 1. Tìm sách theo slug hoặc tên gần đúng
+        let product = await this.productRepository.findOne({
+          where: [
+            { slug: keyword, status: 1, isVerified: true },
+            { name: ILike(`%${keyword}%`), status: 1, isVerified: true },
+          ],
+          relations: {
+            albums: { media: true },
+            categories: true,
+            authors: true,
+          },
+        });
+
+        // 2. Nếu không khớp trực tiếp, dùng Hybrid Search tìm cuốn sát nhất
+        if (!product) {
+          const hybridMatches = await this.productsService.searchHybridB(
+            keyword,
+            1,
+            { alpha: 0.7, threshold: 0.65, minScore: 0.25 },
+          );
+          if (hybridMatches && hybridMatches.length > 0 && hybridMatches[0]) {
+            product = await this.productRepository.findOne({
+              where: { id: hybridMatches[0].id },
+              relations: {
+                albums: { media: true },
+                categories: true,
+                authors: true,
+              },
+            });
+          }
+        }
+
+        if (!product) continue;
+
+        const stock = Number(product.stockQuantity || 0);
+        if (stock <= 0) {
+          outOfStockNames.push(product.name || keyword);
+          continue;
+        }
+
+        // Giới hạn số lượng thêm vào giỏ không vượt quá tồn kho thực tế
+        const finalAmount = Math.min(stock, requestedAmount);
+        const unitPrice = Number(product.finalPrice || product.price || 0);
+        const totalPrice = unitPrice * finalAmount;
+        const thumbnailUrl = product.albums?.[0]?.media?.fileUrl || null;
+
+        preparedItems.push({
+          productId: product.id,
+          amount: finalAmount,
+          name: product.name || '',
+          slug: product.slug || '',
+          unitPrice,
+          totalPrice,
+          stockQuantity: stock,
+          thumbnailUrl,
+        });
+
+        suggestedProducts.push({
+          id: product.id,
+          name: product.name || '',
+          slug: product.slug || '',
+          price: Number(product.price || 0),
+          finalPrice: unitPrice,
+          shortDescribe: product.shortDescribe || '',
+          stockQuantity: stock,
+          soldCount: Number(product.soldCount || 0),
+          thumbnailUrl,
+          categories: product.categories?.map((c) => c.name || '') || [],
+          authors: product.authors?.map((a) => a.name || '') || [],
+        });
+      }
+
+      if (preparedItems.length === 0) {
+        const msg =
+          outOfStockNames.length > 0
+            ? `Rất tiếc, cuốn sách "${outOfStockNames.join(', ')}" hiện đang tạm hết hàng nên chưa thể thêm vào giỏ.`
+            : 'Không tìm thấy cuốn sách bạn muốn thêm vào giỏ hàng trong kho của Bookstore.';
+        return {
+          toolName: 'prepareAddToCartTool',
+          toolOutputText: msg,
+          suggestedProducts: [],
+          cartAction: null,
+        };
+      }
+
+      const totalAmount = preparedItems.reduce(
+        (sum, item) => sum + item.totalPrice,
+        0,
+      );
+
+      const summaryLines = preparedItems.map(
+        (item, idx) =>
+          `${idx + 1}. "${item.name}" (ID: ${item.productId}) — Số lượng: ${item.amount} cuốn | Đơn giá: ${item.unitPrice.toLocaleString('vi-VN')}đ | Thành tiền: ${item.totalPrice.toLocaleString('vi-VN')}đ`,
+      );
+
+      return {
+        toolName: 'prepareAddToCartTool',
+        toolOutputText: `Đã chuẩn bị danh sách chờ thêm vào giỏ hàng:\n${summaryLines.join('\n')}\nTổng tạm tính: ${totalAmount.toLocaleString('vi-VN')}đ.\nHãy hỏi xác nhận lại khách hàng một lần nữa (ví dụ: "Bạn xác nhận chốt thêm vào giỏ hàng nhé?") trước khi thực hiện.`,
+        suggestedProducts,
+        cartAction: {
+          status: 'AWAITING_CONFIRMATION',
+          items: preparedItems,
+          totalAmount,
+        },
+      };
+    } catch (error: any) {
+      this.logger.error(
+        `Lỗi khi thực thi prepareAddToCartTool: ${error?.message || error}`,
+      );
+      return {
+        toolName: 'prepareAddToCartTool',
+        toolOutputText: 'Không thể chuẩn bị giỏ hàng ngay lúc này, vui lòng thử lại.',
+        cartAction: null,
       };
     }
   }

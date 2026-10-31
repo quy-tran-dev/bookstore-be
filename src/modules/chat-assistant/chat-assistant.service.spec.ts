@@ -35,6 +35,7 @@ describe('ChatAssistantService - Kiểm thử Trợ lý AI Tư vấn Khách hàn
     executeSearchBooks: jest.fn(),
     executeGetBookDetail: jest.fn(),
     executeTrackOrder: jest.fn(),
+    executePrepareAddToCart: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -68,6 +69,30 @@ describe('ChatAssistantService - Kiểm thử Trợ lý AI Tư vấn Khách hàn
     expect(res.usedTool).toBeNull();
     expect(res.suggestedProducts).toHaveLength(0);
     expect(res.reply).toContain('Trợ lý tư vấn sách');
+    expect(mockChatToolsService.executeSearchBooks).not.toHaveBeenCalled();
+  });
+
+  it('phải từ chối lịch sự các câu hỏi ngoài lề không liên quan đến việc mua bán sách (Off-Topic Guardrail)', async () => {
+    const offTopicQuestions = [
+      'Thời tiết hôm nay ở Hà Nội có mưa không?',
+      'Giải phương trình bậc 2: 2x + 5 = 15 giúp mình với',
+      'Viết đoạn code Python sắp xếp mảng nhanh',
+      'Giá vàng hôm nay bao nhiêu một lượng?',
+    ];
+
+    for (const q of offTopicQuestions) {
+      const res = await service.handleUserMessage({
+        message: q,
+        sessionId: 'sess-off-topic',
+      });
+
+      expect(res.usedTool).toBeNull();
+      expect(res.suggestedProducts).toHaveLength(0);
+      expect(res.reply).toContain(
+        'chỉ giải đáp các câu hỏi liên quan đến tìm kiếm sách',
+      );
+    }
+
     expect(mockChatToolsService.executeSearchBooks).not.toHaveBeenCalled();
   });
 
@@ -192,5 +217,68 @@ describe('ChatAssistantService - Kiểm thử Trợ lý AI Tư vấn Khách hàn
     const cleared = await service.clearSessionHistory('sess-clear-1');
     expect(cleared.cleared).toBe(true);
     expect(await service.getSessionHistory('sess-clear-1')).toHaveLength(0);
+  });
+
+  it('phải thực hiện luồng 2 bước Thêm giỏ hàng nhanh: (1) Hỏi xác nhận lại AWAITING_CONFIRMATION -> (2) Khách chốt CONFIRMED và trả list { productId, amount } cho FE', async () => {
+    mockChatToolsService.executePrepareAddToCart.mockResolvedValueOnce({
+      toolName: 'prepareAddToCartTool',
+      toolOutputText: 'Đã chuẩn bị danh sách chờ thêm vào giỏ hàng',
+      suggestedProducts: [
+        {
+          id: 'book-uuid-1',
+          name: 'Clean Code - Mã Sạch',
+          slug: 'clean-code-ma-sach',
+          price: 180000,
+          finalPrice: 135000,
+          stockQuantity: 10,
+        },
+      ],
+      cartAction: {
+        status: 'AWAITING_CONFIRMATION',
+        items: [
+          {
+            productId: 'book-uuid-1',
+            amount: 2,
+            name: 'Clean Code - Mã Sạch',
+            slug: 'clean-code-ma-sach',
+            unitPrice: 135000,
+            totalPrice: 270000,
+            stockQuantity: 10,
+          },
+        ],
+        totalAmount: 270000,
+      },
+    });
+
+    // Bước 1: Khách yêu cầu thêm 2 cuốn Clean Code vào giỏ hàng
+    const step1 = await service.handleUserMessage({
+      message: 'Thêm cho mình 2 cuốn Clean Code vào giỏ hàng nhé',
+      sessionId: 'sess-cart-1',
+    });
+
+    expect(mockChatToolsService.executePrepareAddToCart).toHaveBeenCalledWith({
+      items: [{ slugOrName: 'Clean Code', amount: 2 }],
+    });
+    expect(step1.usedTool).toBe('prepareAddToCartTool');
+    expect(step1.cartAction?.status).toBe('AWAITING_CONFIRMATION');
+    expect(step1.reply).toContain('Chốt / Đồng ý');
+
+    // Bước 2: Khách nhắn xác nhận "Ok chốt nhé" -> Hệ thống trả về CONFIRMED kèm mảng items { productId, amount } cho FE
+    const step2 = await service.handleUserMessage({
+      message: 'Ok chốt nhé',
+      sessionId: 'sess-cart-1',
+    });
+
+    expect(step2.usedTool).toBe('confirmAddToCartTool');
+    expect(step2.cartAction?.status).toBe('CONFIRMED');
+    expect(step2.cartAction?.items).toEqual([
+      expect.objectContaining({
+        productId: 'book-uuid-1',
+        amount: 2,
+        unitPrice: 135000,
+        totalPrice: 270000,
+      }),
+    ]);
+    expect(step2.cartAction?.totalAmount).toBe(270000);
   });
 });

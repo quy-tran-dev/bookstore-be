@@ -8,6 +8,7 @@ import { SendChatMessageDto } from './dto/send-chat-message.dto';
 import {
   AssistantToolName,
   ChatAssistantResponse,
+  ChatCartAction,
   ChatHistoryEntry,
   ToolExecutionOutcome,
 } from './interfaces/chat-assistant.interface';
@@ -19,17 +20,21 @@ export class ChatAssistantService {
 
   // Thời gian lưu trữ phiên hội thoại trong Redis Cache: 30 phút (tính bằng ms)
   private static readonly SESSION_TTL_MS = 30 * 60 * 1000;
+  // Thời gian lưu giỏ hàng tạm chờ khách xác nhận: 15 phút (tính bằng ms)
+  private static readonly PENDING_CART_TTL_MS = 15 * 60 * 1000;
   // Số lượng tin nhắn tối đa giữ lại trong ngữ cảnh để tối ưu chi phí Token
   private static readonly MAX_HISTORY_MESSAGES = 10;
 
-  // Chỉ dẫn hệ thống (System Instruction) định hình phong cách tư vấn và chống bịa đặt thông tin
+  // Chỉ dẫn hệ thống (System Instruction) định hình phong cách tư vấn, giới hạn phạm vi cửa hàng sách và chống bịa đặt thông tin
   private static readonly SYSTEM_INSTRUCTION = `Bạn là Trợ lý AI Tư vấn Khách hàng chính thức của Hiệu sách trực tuyến Bookstore.
 Nguyên tắc bắt buộc:
 1. Chỉ tư vấn các cuốn sách thực tế có trong kết quả từ công cụ searchBooksTool hoặc getBookDetailTool. Tuyệt đối KHÔNG tự bịa ra tên sách, giá tiền hoặc trạng thái tồn kho không có trong dữ liệu công cụ.
-2. Khi khách hỏi tìm sách, gợi ý sách theo chủ đề, kỹ năng, tác giả hoặc tầm giá, hãy gọi công cụ searchBooksTool.
-3. Khi khách hỏi sâu về thông tin chi tiết của một cuốn sách cụ thể (nhà xuất bản, số trang, tóm tắt nội dung), hãy gọi công cụ getBookDetailTool.
-4. Khi khách hỏi kiểm tra đơn hàng hoặc tình trạng giao hàng, hãy gọi công cụ trackOrderTool.
-5. Trả lời bằng tiếng Việt lịch sự, ngắn gọn, thân thiện và trình bày rõ ràng.`;
+2. Giới hạn phạm vi (Domain Guardrail): Bạn CHỈ trả lời các câu hỏi liên quan đến việc mua bán sách, tìm kiếm sách, thông tin tác giả, nhà xuất bản, thể loại sách và tra cứu đơn hàng tại Bookstore. Nếu khách hàng hỏi các chủ đề không liên quan đến hiệu sách (như giải toán, viết code hộ, thời tiết, bóng đá, nấu ăn, y tế, chính trị, chứng khoán, làm thơ, dịch văn bản...), hãy lịch sự từ chối và hướng khách hàng quay lại việc tìm sách.
+3. Khi khách hỏi tìm sách, gợi ý sách theo chủ đề, kỹ năng, tác giả hoặc tầm giá, hãy gọi công cụ searchBooksTool.
+4. Khi khách hỏi sâu về thông tin chi tiết của một cuốn sách cụ thể (nhà xuất bản, số trang, tóm tắt nội dung), hãy gọi công cụ getBookDetailTool.
+5. Khi khách hỏi kiểm tra đơn hàng hoặc tình trạng giao hàng, hãy gọi công cụ trackOrderTool.
+6. Khi khách chọn mua sách hoặc yêu cầu thêm sách vào giỏ hàng, hãy gọi công cụ prepareAddToCartTool và HỎI XÁC NHẬN LẠI khách hàng một lần nữa trước khi chốt.
+7. Trả lời bằng tiếng Việt lịch sự, ngắn gọn, thân thiện và trình bày rõ ràng.`;
 
   constructor(
     private readonly chatToolsService: ChatToolsService,
@@ -38,9 +43,9 @@ Nguyên tắc bắt buộc:
 
   /**
    * Xử lý tin nhắn của khách hàng:
-   * 1. Làm sạch đầu vào & kiểm tra chống Prompt Injection
+   * 1. Làm sạch đầu vào, kiểm tra chống Prompt Injection & chặn câu hỏi ngoài lề (Off-Topic Guardrail)
    * 2. Tải lịch sử hội thoại từ Redis Cache
-   * 3. Gọi Gemini Function Calling (hoặc tự động chuyển sang bộ định tuyến nội bộ + Ollama nếu chưa cấu hình Gemini API Key)
+   * 3. Gọi Gemini Function Calling (hoặc tự động chuyển sang bộ định tuyến nội bộ nếu chưa cấu hình Gemini API Key)
    * 4. Lưu lại lịch sử hội thoại mới và trả kết quả kèm danh sách thẻ sản phẩm (suggestedProducts)
    */
   async handleUserMessage(
@@ -50,7 +55,7 @@ Nguyên tắc bắt buộc:
     const sessionId = dto.sessionId?.trim() || `chat-${uuidv7()}`;
     const sanitizedMessage = SectionSanitizeUtil.sanitizeText(dto.message);
 
-    // Chặn sớm các câu lệnh cố tình tấn công Prompt Injection
+    // 1. Chặn sớm các câu lệnh cố tình tấn công Prompt Injection
     if (this.isPromptInjectionAttempt(sanitizedMessage)) {
       return {
         sessionId,
@@ -63,7 +68,85 @@ Nguyên tắc bắt buộc:
       };
     }
 
+    // 2. Chặn sớm các câu hỏi ngoài lề không liên quan đến việc mua bán sách & đơn hàng tại Bookstore
+    if (this.isOffTopicQuery(sanitizedMessage)) {
+      return {
+        sessionId,
+        reply:
+          'Xin lỗi bạn, mình là Trợ lý AI chuyên tư vấn sách và hỗ trợ đơn hàng của Bookstore nên chỉ giải đáp các câu hỏi liên quan đến tìm kiếm sách, thông tin xuất bản và tra cứu đơn hàng. Bạn đang quan tâm đến cuốn sách hay thể loại nào để mình gợi ý nhé?',
+        usedTool: null,
+        suggestedProducts: [],
+        referencedOrders: [],
+        cartAction: null,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
     const history = await this.getSessionHistory(sessionId);
+
+    // 3. Kiểm tra xem phiên chat hiện tại có giỏ hàng tạm (pendingCart) đang chờ khách xác nhận hay không
+    const pendingCart = await this.getPendingCart(sessionId);
+    if (pendingCart && pendingCart.items.length > 0) {
+      if (this.isCartConfirmationMessage(sanitizedMessage)) {
+        await this.clearPendingCart(sessionId);
+        const confirmedAction: ChatCartAction = {
+          status: 'CONFIRMED',
+          items: pendingCart.items,
+          totalAmount: pendingCart.totalAmount,
+        };
+        const itemSummary = pendingCart.items
+          .map(
+            (i) =>
+              `**${i.name}** (Số lượng: **${i.amount}**, Thành tiền: **${i.totalPrice.toLocaleString('vi-VN')}đ**)`,
+          )
+          .join(', ');
+        const confirmReply = `Đã chốt! Mình đã gửi yêu cầu thêm ${itemSummary} (Tổng cộng: **${pendingCart.totalAmount.toLocaleString('vi-VN')}đ**) vào giỏ hàng của bạn.`;
+
+        await this.appendSessionHistory(
+          sessionId,
+          history,
+          sanitizedMessage,
+          confirmReply,
+        );
+
+        return {
+          sessionId,
+          reply: confirmReply,
+          usedTool: 'confirmAddToCartTool',
+          suggestedProducts: [],
+          referencedOrders: [],
+          cartAction: confirmedAction,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      if (this.isCartCancellationMessage(sanitizedMessage)) {
+        await this.clearPendingCart(sessionId);
+        const cancelReply =
+          'Mình đã hủy thao tác thêm vào giỏ hàng theo yêu cầu của bạn. Bạn cần mình tìm hay tư vấn thêm cuốn sách nào khác không?';
+
+        await this.appendSessionHistory(
+          sessionId,
+          history,
+          sanitizedMessage,
+          cancelReply,
+        );
+
+        return {
+          sessionId,
+          reply: cancelReply,
+          usedTool: null,
+          suggestedProducts: [],
+          referencedOrders: [],
+          cartAction: {
+            status: 'CANCELLED',
+            items: [],
+            totalAmount: 0,
+          },
+          timestamp: new Date().toISOString(),
+        };
+      }
+    }
 
     let reply = '';
     let outcome: ToolExecutionOutcome | null = null;
@@ -94,18 +177,25 @@ Nguyên tắc bắt buộc:
       outcome = fallbackResult.outcome;
     }
 
-    // Cập nhật lịch sử hội thoại vào Redis Cache (giữ tối đa 10 tin nhắn gần nhất)
-    const nowIso = new Date().toISOString();
-    const updatedHistory: ChatHistoryEntry[] = [
-      ...history,
-      { role: 'user', content: sanitizedMessage, timestamp: nowIso },
-      { role: 'assistant', content: reply, timestamp: nowIso },
-    ].slice(-ChatAssistantService.MAX_HISTORY_MESSAGES);
+    // Nếu kết quả Tool trả về yêu cầu chờ xác nhận thêm giỏ hàng (AWAITING_CONFIRMATION),
+    // lưu danh sách sản phẩm tạm vào Redis để bước tiếp theo khách chỉ cần nhắn "Chốt / Đồng ý"
+    if (
+      outcome?.cartAction &&
+      outcome.cartAction.status === 'AWAITING_CONFIRMATION' &&
+      outcome.cartAction.items.length > 0
+    ) {
+      await this.cacheManager.set(
+        this.buildPendingCartCacheKey(sessionId),
+        outcome.cartAction,
+        ChatAssistantService.PENDING_CART_TTL_MS,
+      );
+    }
 
-    await this.cacheManager.set(
-      this.buildSessionCacheKey(sessionId),
-      updatedHistory,
-      ChatAssistantService.SESSION_TTL_MS,
+    const nowIso = await this.appendSessionHistory(
+      sessionId,
+      history,
+      sanitizedMessage,
+      reply,
     );
 
     return {
@@ -114,6 +204,7 @@ Nguyên tắc bắt buộc:
       usedTool: outcome?.toolName || null,
       suggestedProducts: outcome?.suggestedProducts || [],
       referencedOrders: outcome?.referencedOrders || [],
+      cartAction: outcome?.cartAction || null,
       timestamp: nowIso,
     };
   }
@@ -215,6 +306,35 @@ Nguyên tắc bắt buộc:
                     description: 'Mã đơn hàng (ví dụ: ORD-123456-789) nếu khách hàng cung cấp',
                   },
                 },
+              },
+            },
+            {
+              name: 'prepareAddToCartTool',
+              description:
+                'Chuẩn bị thêm một hoặc nhiều cuốn sách kèm số lượng vào giỏ hàng khi khách hàng chọn mua hoặc yêu cầu thêm vào giỏ.',
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  items: {
+                    type: 'ARRAY',
+                    description: 'Danh sách các cuốn sách và số lượng khách muốn thêm vào giỏ',
+                    items: {
+                      type: 'OBJECT',
+                      properties: {
+                        slugOrName: {
+                          type: 'STRING',
+                          description: 'Tên cuốn sách hoặc đường dẫn slug của cuốn sách',
+                        },
+                        amount: {
+                          type: 'NUMBER',
+                          description: 'Số lượng sách cần thêm (mặc định là 1)',
+                        },
+                      },
+                      required: ['slugOrName'],
+                    },
+                  },
+                },
+                required: ['items'],
               },
             },
           ],
@@ -364,7 +484,24 @@ Nguyên tắc bắt buộc:
       };
     }
 
-    // 3. Nhận diện yêu cầu xem chi tiết một cuốn sách cụ thể
+    // 3. Nhận diện yêu cầu thêm sách vào giỏ hàng nhanh (ví dụ: "Thêm 2 cuốn Clean Code vào giỏ hàng", "Cho mình lấy 3 quyển Thiết kế hệ thống")
+    const isAddToCartIntent =
+      /(thêm.*vào giỏ|bỏ.*vào giỏ|cho.*vào giỏ|lấy\s+\d+\s*(cuốn|quyển)|mua\s+\d+\s*(cuốn|quyển)|đặt\s+\d+\s*(cuốn|quyển))/i.test(
+        lower,
+      );
+
+    if (isAddToCartIntent) {
+      const parsedItems = this.extractCartItemsFromMessage(message);
+      const outcome = await this.chatToolsService.executePrepareAddToCart({
+        items: parsedItems,
+      });
+      return {
+        reply: this.buildDeterministicReplyFromOutcome(outcome),
+        outcome,
+      };
+    }
+
+    // 4. Nhận diện yêu cầu xem chi tiết một cuốn sách cụ thể
     const isDetailIntent =
       /(chi tiết cuốn|thông tin cuốn|nhà xuất bản|bao nhiêu trang|số trang|năm xuất bản|tóm tắt cuốn)/i.test(
         lower,
@@ -431,11 +568,76 @@ Nguyên tắc bắt buộc:
           },
           currentUserId,
         );
+      case 'prepareAddToCartTool':
+        return this.chatToolsService.executePrepareAddToCart({
+          items: Array.isArray(args.items) ? args.items : [],
+        });
       default:
         return this.chatToolsService.executeSearchBooks({
           query: String(args.query || ''),
         });
     }
+  }
+
+  /**
+   * Bóc tách danh sách tên sách và số lượng (amount) từ câu nhắn tự nhiên của khách hàng
+   * Ví dụ: "Thêm cho mình 2 cuốn Clean Code và 1 quyển Thiết kế hệ thống vào giỏ hàng"
+   */
+  private extractCartItemsFromMessage(
+    message: string,
+  ): { slugOrName: string; amount: number }[] {
+    // Tách theo liên từ "và", dấu phẩy nếu khách chọn nhiều cuốn cùng lúc
+    const cleanedMsg = message
+      .replace(/(vào giỏ hàng|vào giỏ|giúp mình|cho mình|shop ơi|nhé|ạ|đi)/gi, ' ')
+      .replace(/^(thêm|bỏ|cho|mua|lấy|đặt)\s+/i, ' ')
+      .trim();
+
+    const segments = cleanedMsg
+      .split(/\s*(?:,|hoặc|\bvà\b)\s*/i)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const items: { slugOrName: string; amount: number }[] = [];
+
+    for (const seg of segments) {
+      // Mẫu 1: "<số lượng> cuốn/quyển <tên sách>" (VD: "2 cuốn Clean Code")
+      const prefixQtyMatch = seg.match(
+        /^(?:thêm|lấy|mua|đặt)?\s*(\d+)\s*(?:cuốn|quyển|bộ|tập)?\s*(?:sách)?\s+(.+)$/i,
+      );
+      if (prefixQtyMatch) {
+        const amount = Math.max(1, parseInt(prefixQtyMatch[1], 10));
+        const slugOrName = prefixQtyMatch[2]
+          .replace(/^(cuốn|quyển|sách)\s+/i, '')
+          .trim();
+        if (slugOrName) {
+          items.push({ slugOrName, amount });
+          continue;
+        }
+      }
+
+      // Mẫu 2: "<tên sách> số lượng <số lượng>" (VD: "cuốn Clean Code số lượng 3")
+      const suffixQtyMatch = seg.match(
+        /^(?:cuốn|quyển|sách)?\s*(.+?)\s+(?:số lượng|sl|x)\s*(\d+)$/i,
+      );
+      if (suffixQtyMatch) {
+        const slugOrName = suffixQtyMatch[1].trim();
+        const amount = Math.max(1, parseInt(suffixQtyMatch[2], 10));
+        if (slugOrName) {
+          items.push({ slugOrName, amount });
+          continue;
+        }
+      }
+
+      // Mẫu 3: Không ghi rõ số lượng -> Mặc định amount = 1
+      const fallbackName = seg
+        .replace(/^(thêm|lấy|mua|đặt|cuốn|quyển|sách)\s+/gi, '')
+        .trim();
+      if (fallbackName) {
+        items.push({ slugOrName: fallbackName, amount: 1 });
+      }
+    }
+
+    return items;
   }
 
   /**
@@ -536,7 +738,78 @@ Nguyên tắc bắt buộc:
       return `Dưới đây là thông tin đơn hàng của bạn:\n\n${lines.join('\n')}`;
     }
 
+    if (outcome.toolName === 'prepareAddToCartTool') {
+      const cart = outcome.cartAction;
+      if (!cart || cart.items.length === 0) {
+        return outcome.toolOutputText;
+      }
+      const lines = cart.items.map(
+        (item, idx) =>
+          `${idx + 1}. **${item.name}** — Số lượng: **${item.amount}** | Đơn giá: **${item.unitPrice.toLocaleString('vi-VN')}đ** (Tạm tính: **${item.totalPrice.toLocaleString('vi-VN')}đ**)`,
+      );
+      return `Mình đã kiểm tra kho và chuẩn bị danh sách sách bạn chọn:\n\n${lines.join('\n')}\n\nTổng tạm tính: **${cart.totalAmount.toLocaleString('vi-VN')}đ**.\nBạn xác nhận **Chốt / Đồng ý** để mình thêm ngay vào giỏ hàng nhé?`;
+    }
+
     return outcome.toolOutputText;
+  }
+
+  /**
+   * Kiểm tra xem tin nhắn của khách có phải là câu xác nhận chốt thêm vào giỏ hàng hay không
+   */
+  private isCartConfirmationMessage(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    return /^(ok|oke|okay|chốt|đồng ý|xác nhận|đúng|ừ|ừm|uh|yes|thêm)(\s+(ok|oke|chốt|đơn|đồng ý|xác nhận|đúng|rồi|đi|vào|giỏ|hàng|nhé|nha|ạ|shop|luôn))*[.!?\s]*$/i.test(
+      normalized,
+    );
+  }
+
+  /**
+   * Kiểm tra xem tin nhắn của khách có phải là câu hủy thao tác thêm vào giỏ hàng hay không
+   */
+  private isCartCancellationMessage(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    return /^(hủy|huỷ|không|thôi|bỏ qua|cancel|no)(\s+(đơn|giỏ|hàng|lấy|thêm|nữa|đi|nhé|nha|ạ|shop))*[.!?\s]*$/i.test(
+      normalized,
+    );
+  }
+
+  private async getPendingCart(
+    sessionId: string,
+  ): Promise<ChatCartAction | null> {
+    if (!sessionId) return null;
+    const cached = await this.cacheManager.get<ChatCartAction>(
+      this.buildPendingCartCacheKey(sessionId),
+    );
+    return cached && Array.isArray(cached.items) ? cached : null;
+  }
+
+  private async clearPendingCart(sessionId: string): Promise<void> {
+    if (!sessionId) return;
+    await this.cacheManager.del(this.buildPendingCartCacheKey(sessionId));
+  }
+
+  private async appendSessionHistory(
+    sessionId: string,
+    history: ChatHistoryEntry[],
+    userMessage: string,
+    assistantReply: string,
+  ): Promise<string> {
+    const nowIso = new Date().toISOString();
+    const newEntries: ChatHistoryEntry[] = [
+      { role: 'user', content: userMessage, timestamp: nowIso },
+      { role: 'assistant', content: assistantReply, timestamp: nowIso },
+    ];
+    const updatedHistory: ChatHistoryEntry[] = [
+      ...history,
+      ...newEntries,
+    ].slice(-ChatAssistantService.MAX_HISTORY_MESSAGES);
+
+    await this.cacheManager.set(
+      this.buildSessionCacheKey(sessionId),
+      updatedHistory,
+      ChatAssistantService.SESSION_TTL_MS,
+    );
+    return nowIso;
   }
 
   /**
@@ -548,7 +821,50 @@ Nguyên tắc bắt buộc:
     );
   }
 
+  /**
+   * Kiểm tra giới hạn phạm vi tư vấn (Domain Guardrail):
+   * Phát hiện các câu hỏi hoàn toàn không liên quan đến việc mua bán sách hoặc tra cứu đơn hàng
+   * (ví dụ: nhờ viết code/debug, giải phương trình toán/lý/hóa, hỏi thời tiết, kết quả bóng đá, xổ số, nấu ăn, y tế, chứng khoán...).
+   * Lưu ý: Nếu khách hỏi tìm sách về các chủ đề đó (VD: "tìm sách dạy nấu ăn", "mua sách toán"), hàm vẫn cho phép bình thường.
+   */
+  private isOffTopicQuery(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    if (!normalized) return false;
+
+    // Nếu câu hỏi có chứa ngữ cảnh rõ ràng về sách, tác giả, xuất bản hoặc đơn hàng thì luôn CHO PHÉP
+    const hasBookstoreContext =
+      /(sách|truyện|tiểu thuyết|tác phẩm|tác giả|nhà xuất bản|\bnxb\b|giỏ hàng|đơn hàng|mã đơn|\bord-|giao hàng|vận chuyển|bookstore)/i.test(
+        normalized,
+      );
+
+    if (hasBookstoreContext) {
+      return false;
+    }
+
+    // Danh sách các mẫu câu hỏi ngoài lề phổ biến không thuộc nghiệp vụ bán sách
+    const offTopicPatterns = [
+      // 1. Nhờ viết code, giải bài tập lập trình, toán học, lý, hóa
+      /(viết (đoạn |hàm |chương trình )?code|debug lỗi|fix bug|giải (phương trình|bài toán|bài tập|tích phân|đạo hàm)|làm hộ bài|tính giúp|\d+\s*[+\-*/^]\s*\d+\s*=)/i,
+      // 2. Hỏi thời tiết, dự báo mưa nắng, ngày giờ
+      /(thời tiết hôm nay|trời (có )?mưa không|nhiệt độ ngoài trời|dự báo thời tiết)/i,
+      // 3. Bóng đá, thể thao, xổ số, lô đề, cờ bạc, tử vi, bói toán
+      /(kết quả (xổ số|bóng đá)|tỷ số trận|soi cầu|lô đề|xem (bói|tử vi|ngày tốt)|ngoại hạng anh|world cup)/i,
+      // 4. Công thức nấu ăn, cách chế biến món ăn (khi không hỏi mua sách nấu ăn)
+      /(cách (nấu|làm món|kho|xào|chiên|nướng)|công thức nấu|nguyên liệu nấu món)/i,
+      // 5. Tài chính cá nhân ngoài lề: giá vàng, tỷ giá ngoại tệ, giá bitcoin/coin, cổ phiếu
+      /(giá vàng hôm nay|giá bitcoin|tỷ giá (usd|đô la)|mã cổ phiếu nào)/i,
+      // 6. Y tế, kê đơn thuốc, chính trị, làm thơ, viết văn hộ
+      /(uống thuốc gì|triệu chứng bệnh|làm (một )?bài thơ|viết (bài văn|đơn xin nghỉ)|dịch câu này sang)/i,
+    ];
+
+    return offTopicPatterns.some((pattern) => pattern.test(normalized));
+  }
+
   private buildSessionCacheKey(sessionId: string): string {
     return `/chat-assistant/sessions/${sessionId}`;
+  }
+
+  private buildPendingCartCacheKey(sessionId: string): string {
+    return `/chat-assistant/pending-cart/${sessionId}`;
   }
 }
