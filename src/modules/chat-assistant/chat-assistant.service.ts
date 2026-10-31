@@ -373,7 +373,7 @@ Nguyên tắc bắt buộc:
     if (isDetailIntent) {
       const cleanedTarget = message
         .replace(
-          /(cho mình xem|chi tiết cuốn|thông tin cuốn|sách|nhà xuất bản|bao nhiêu trang|số trang|năm xuất bản|tóm tắt cuốn|là gì|nhé|ạ|\?)/gi,
+          /(cho mình xem|chi tiết cuốn|thông tin cuốn|nhà xuất bản|bao nhiêu trang|số trang|năm xuất bản|tóm tắt cuốn|cuốn|quyển|sách|và|của|là gì|nhé|ạ|\?)/gi,
           ' ',
         )
         .replace(/\s+/g, ' ')
