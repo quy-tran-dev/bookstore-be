@@ -12,29 +12,19 @@ import {
   ChatHistoryEntry,
   ToolExecutionOutcome,
 } from './interfaces/chat-assistant.interface';
+import {
+  CHAT_ASSISTANT_REPLIES,
+  CHAT_GEMINI_TOOLS,
+  CHAT_MAX_HISTORY_MESSAGES,
+  CHAT_PENDING_CART_TTL_MS,
+  CHAT_SESSION_TTL_MS,
+  CHAT_SYSTEM_INSTRUCTION,
+} from './constants/chat-assistant.constant';
 import { SectionSanitizeUtil } from '../products/utils/section-sanitize.util';
 
 @Injectable()
 export class ChatAssistantService {
   private readonly logger = new Logger(ChatAssistantService.name);
-
-  // Thời gian lưu trữ phiên hội thoại trong Redis Cache: 30 phút (tính bằng ms)
-  private static readonly SESSION_TTL_MS = 30 * 60 * 1000;
-  // Thời gian lưu giỏ hàng tạm chờ khách xác nhận: 15 phút (tính bằng ms)
-  private static readonly PENDING_CART_TTL_MS = 15 * 60 * 1000;
-  // Số lượng tin nhắn tối đa giữ lại trong ngữ cảnh để tối ưu chi phí Token
-  private static readonly MAX_HISTORY_MESSAGES = 10;
-
-  // Chỉ dẫn hệ thống (System Instruction) định hình phong cách tư vấn, giới hạn phạm vi cửa hàng sách và chống bịa đặt thông tin
-  private static readonly SYSTEM_INSTRUCTION = `Bạn là Trợ lý AI Tư vấn Khách hàng chính thức của Hiệu sách trực tuyến Bookstore.
-Nguyên tắc bắt buộc:
-1. Chỉ tư vấn các cuốn sách thực tế có trong kết quả từ công cụ searchBooksTool hoặc getBookDetailTool. Tuyệt đối KHÔNG tự bịa ra tên sách, giá tiền hoặc trạng thái tồn kho không có trong dữ liệu công cụ.
-2. Giới hạn phạm vi (Domain Guardrail): Bạn CHỈ trả lời các câu hỏi liên quan đến việc mua bán sách, tìm kiếm sách, thông tin tác giả, nhà xuất bản, thể loại sách và tra cứu đơn hàng tại Bookstore. Nếu khách hàng hỏi các chủ đề không liên quan đến hiệu sách (như giải toán, viết code hộ, thời tiết, bóng đá, nấu ăn, y tế, chính trị, chứng khoán, làm thơ, dịch văn bản...), hãy lịch sự từ chối và hướng khách hàng quay lại việc tìm sách.
-3. Khi khách hỏi tìm sách, gợi ý sách theo chủ đề, kỹ năng, tác giả hoặc tầm giá, hãy gọi công cụ searchBooksTool.
-4. Khi khách hỏi sâu về thông tin chi tiết của một cuốn sách cụ thể (nhà xuất bản, số trang, tóm tắt nội dung), hãy gọi công cụ getBookDetailTool.
-5. Khi khách hỏi kiểm tra đơn hàng hoặc tình trạng giao hàng, hãy gọi công cụ trackOrderTool.
-6. Khi khách chọn mua sách hoặc yêu cầu thêm sách vào giỏ hàng, hãy gọi công cụ prepareAddToCartTool và HỎI XÁC NHẬN LẠI khách hàng một lần nữa trước khi chốt.
-7. Trả lời bằng tiếng Việt lịch sự, ngắn gọn, thân thiện và trình bày rõ ràng.`;
 
   constructor(
     private readonly chatToolsService: ChatToolsService,
@@ -59,21 +49,34 @@ Nguyên tắc bắt buộc:
     if (this.isPromptInjectionAttempt(sanitizedMessage)) {
       return {
         sessionId,
-        reply:
-          'Xin lỗi, mình chỉ là Trợ lý tư vấn sách và hỗ trợ tra cứu đơn hàng của Bookstore nên không thể thực hiện yêu cầu này. Bạn đang cần tìm sách về chủ đề gì để mình gợi ý nhé?',
+        reply: CHAT_ASSISTANT_REPLIES.PROMPT_INJECTION_BLOCKED,
         usedTool: null,
         suggestedProducts: [],
         referencedOrders: [],
+        cartAction: null,
         timestamp: new Date().toISOString(),
       };
     }
 
-    // 2. Chặn sớm các câu hỏi ngoài lề không liên quan đến việc mua bán sách & đơn hàng tại Bookstore
+    // 2. Giới hạn quyền truy cập dữ liệu nhạy cảm (RBAC & Confidential Data Guardrail):
+    // Chặn các câu hỏi dò hỏi giá vốn (cost), giá nhập, doanh thu, lợi nhuận, ghi chú nội bộ Admin hoặc dữ liệu khách hàng khác
+    if (this.isConfidentialBusinessQuery(sanitizedMessage)) {
+      return {
+        sessionId,
+        reply: CHAT_ASSISTANT_REPLIES.CONFIDENTIAL_QUERY_BLOCKED,
+        usedTool: null,
+        suggestedProducts: [],
+        referencedOrders: [],
+        cartAction: null,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    // 3. Chặn sớm các câu hỏi ngoài lề không liên quan đến việc mua bán sách & đơn hàng tại Bookstore
     if (this.isOffTopicQuery(sanitizedMessage)) {
       return {
         sessionId,
-        reply:
-          'Xin lỗi bạn, mình là Trợ lý AI chuyên tư vấn sách và hỗ trợ đơn hàng của Bookstore nên chỉ giải đáp các câu hỏi liên quan đến tìm kiếm sách, thông tin xuất bản và tra cứu đơn hàng. Bạn đang quan tâm đến cuốn sách hay thể loại nào để mình gợi ý nhé?',
+        reply: CHAT_ASSISTANT_REPLIES.OFF_TOPIC_BLOCKED,
         usedTool: null,
         suggestedProducts: [],
         referencedOrders: [],
@@ -122,8 +125,7 @@ Nguyên tắc bắt buộc:
 
       if (this.isCartCancellationMessage(sanitizedMessage)) {
         await this.clearPendingCart(sessionId);
-        const cancelReply =
-          'Mình đã hủy thao tác thêm vào giỏ hàng theo yêu cầu của bạn. Bạn cần mình tìm hay tư vấn thêm cuốn sách nào khác không?';
+        const cancelReply = CHAT_ASSISTANT_REPLIES.CART_CANCELLED;
 
         await this.appendSessionHistory(
           sessionId,
@@ -187,7 +189,7 @@ Nguyên tắc bắt buộc:
       await this.cacheManager.set(
         this.buildPendingCartCacheKey(sessionId),
         outcome.cartAction,
-        ChatAssistantService.PENDING_CART_TTL_MS,
+        CHAT_PENDING_CART_TTL_MS,
       );
     }
 
@@ -253,103 +255,15 @@ Nguyên tắc bắt buộc:
         parts: [{ text: userMessage }],
       });
 
-      const tools = [
-        {
-          functionDeclarations: [
-            {
-              name: 'searchBooksTool',
-              description:
-                'Tìm kiếm và gợi ý sách trong cửa hàng dựa trên chủ đề, từ khóa, tên sách, tác giả hoặc khoảng giá.',
-              parameters: {
-                type: 'OBJECT',
-                properties: {
-                  query: {
-                    type: 'STRING',
-                    description: 'Từ khóa hoặc chủ đề sách khách hàng đang tìm kiếm',
-                  },
-                  minPrice: {
-                    type: 'NUMBER',
-                    description: 'Giá tối thiểu (VNĐ) nếu khách hàng yêu cầu',
-                  },
-                  maxPrice: {
-                    type: 'NUMBER',
-                    description: 'Giá tối đa (VNĐ) nếu khách hàng yêu cầu (ví dụ: dưới 150000)',
-                  },
-                },
-                required: ['query'],
-              },
-            },
-            {
-              name: 'getBookDetailTool',
-              description:
-                'Xem thông tin chi tiết của một cuốn sách cụ thể (nhà xuất bản, số trang, năm xuất bản, nội dung chi tiết).',
-              parameters: {
-                type: 'OBJECT',
-                properties: {
-                  slugOrName: {
-                    type: 'STRING',
-                    description: 'Tên cuốn sách hoặc đường dẫn slug của cuốn sách',
-                  },
-                },
-                required: ['slugOrName'],
-              },
-            },
-            {
-              name: 'trackOrderTool',
-              description:
-                'Tra cứu trạng thái đơn hàng hoặc lịch sử đặt hàng gần nhất của khách hàng.',
-              parameters: {
-                type: 'OBJECT',
-                properties: {
-                  orderCode: {
-                    type: 'STRING',
-                    description: 'Mã đơn hàng (ví dụ: ORD-123456-789) nếu khách hàng cung cấp',
-                  },
-                },
-              },
-            },
-            {
-              name: 'prepareAddToCartTool',
-              description:
-                'Chuẩn bị thêm một hoặc nhiều cuốn sách kèm số lượng vào giỏ hàng khi khách hàng chọn mua hoặc yêu cầu thêm vào giỏ.',
-              parameters: {
-                type: 'OBJECT',
-                properties: {
-                  items: {
-                    type: 'ARRAY',
-                    description: 'Danh sách các cuốn sách và số lượng khách muốn thêm vào giỏ',
-                    items: {
-                      type: 'OBJECT',
-                      properties: {
-                        slugOrName: {
-                          type: 'STRING',
-                          description: 'Tên cuốn sách hoặc đường dẫn slug của cuốn sách',
-                        },
-                        amount: {
-                          type: 'NUMBER',
-                          description: 'Số lượng sách cần thêm (mặc định là 1)',
-                        },
-                      },
-                      required: ['slugOrName'],
-                    },
-                  },
-                },
-                required: ['items'],
-              },
-            },
-          ],
-        },
-      ];
-
       // Bước 1: Gửi tin nhắn kèm khai báo danh sách công cụ (Tools) cho Gemini
       const firstResponse = await axios.post(
         endpoint,
         {
           systemInstruction: {
-            parts: [{ text: ChatAssistantService.SYSTEM_INSTRUCTION }],
+            parts: [{ text: CHAT_SYSTEM_INSTRUCTION }],
           },
           contents,
-          tools,
+          tools: CHAT_GEMINI_TOOLS,
           generationConfig: {
             temperature: 0.3,
             maxOutputTokens: 700,
@@ -400,7 +314,7 @@ Nguyên tắc bắt buộc:
           endpoint,
           {
             systemInstruction: {
-              parts: [{ text: ChatAssistantService.SYSTEM_INSTRUCTION }],
+              parts: [{ text: CHAT_SYSTEM_INSTRUCTION }],
             },
             contents: secondContents,
             generationConfig: {
@@ -452,11 +366,11 @@ Nguyên tắc bắt buộc:
   ): Promise<{ reply: string; outcome: ToolExecutionOutcome | null }> {
     const lower = message.toLowerCase();
 
-    // 1. Nhận diện yêu cầu tra cứu đơn hàng (có mã ORD-... hoặc các từ khóa đơn hàng)
+    // 1. Nhận diện yêu cầu tra cứu đơn hàng cụ thể (có mã ORD-... hoặc yêu cầu kiểm tra đơn hàng)
     const orderCodeMatch = message.match(/\bORD-[A-Z0-9-]+\b/i);
     const isOrderIntent =
       Boolean(orderCodeMatch) ||
-      /(đơn hàng|kiểm tra đơn|tra cứu đơn|tình trạng đơn|bao giờ giao|vận chuyển)/i.test(
+      /(kiểm tra đơn|tra cứu đơn|tình trạng đơn|đơn hàng của (mình|tôi|em)|lịch sử đơn hàng)/i.test(
         lower,
       );
 
@@ -471,15 +385,30 @@ Nguyên tắc bắt buộc:
       };
     }
 
-    // 2. Nhận diện câu chào hỏi xã giao cơ bản
+    // 2. Nhận diện câu hỏi về Chính sách cửa hàng (Hoàn tiền, Đổi trả, Phí ship, Giao hàng, Thanh toán, Bản quyền)
+    const isStorePolicyIntent =
+      /(chính sách|hoàn tiền|đổi trả|trả hàng|đổi sách|sách (bị )?(lỗi|rách|móp|hư)|phí (ship|vận chuyển|giao hàng)|giao hàng (mất )?bao lâu|bao giờ nhận được|đồng kiểm|thanh toán (như thế nào|qua đâu|bằng cách nào|cod|vnpay)|chuyển khoản|sách (giả|thật|lậu|bản quyền|chính hãng))/i.test(
+        lower,
+      );
+
+    if (isStorePolicyIntent) {
+      const outcome = await this.chatToolsService.executeGetStorePolicy({
+        topic: message,
+      });
+      return {
+        reply: this.buildDeterministicReplyFromOutcome(outcome),
+        outcome,
+      };
+    }
+
+    // 3. Nhận diện câu chào hỏi xã giao cơ bản
     if (
       /^(xin chào|chào shop|chào bạn|hello|hi|shop ơi|cho mình hỏi)$/i.test(
         lower.trim(),
       )
     ) {
       return {
-        reply:
-          'Chào bạn! Mình là Trợ lý AI của Bookstore. Mình có thể giúp bạn tìm sách theo chủ đề, tầm giá, xem thông tin chi tiết sách hoặc tra cứu trạng thái đơn hàng. Bạn đang quan tâm đến cuốn sách nào nhỉ?',
+        reply: CHAT_ASSISTANT_REPLIES.GREETING,
         outcome: null,
       };
     }
@@ -571,6 +500,10 @@ Nguyên tắc bắt buộc:
       case 'prepareAddToCartTool':
         return this.chatToolsService.executePrepareAddToCart({
           items: Array.isArray(args.items) ? args.items : [],
+        });
+      case 'getStorePolicyTool':
+        return this.chatToolsService.executeGetStorePolicy({
+          topic: args.topic ? String(args.topic) : 'general',
         });
       default:
         return this.chatToolsService.executeSearchBooks({
@@ -802,12 +735,12 @@ Nguyên tắc bắt buộc:
     const updatedHistory: ChatHistoryEntry[] = [
       ...history,
       ...newEntries,
-    ].slice(-ChatAssistantService.MAX_HISTORY_MESSAGES);
+    ].slice(-CHAT_MAX_HISTORY_MESSAGES);
 
     await this.cacheManager.set(
       this.buildSessionCacheKey(sessionId),
       updatedHistory,
-      ChatAssistantService.SESSION_TTL_MS,
+      CHAT_SESSION_TTL_MS,
     );
     return nowIso;
   }
@@ -822,6 +755,29 @@ Nguyên tắc bắt buộc:
   }
 
   /**
+   * Kiểm tra giới hạn quyền truy cập dữ liệu kinh doanh nội bộ & quản trị (RBAC / Confidentiality Guardrail):
+   * Chặn tuyệt đối các câu hỏi dò hỏi:
+   * - Giá vốn, giá nhập kho (`cost`, `giá vốn`, `giá nhập`, `giá sỉ nhập vào`)
+   * - Doanh thu, doanh số, lợi nhuận, tiền lãi, báo cáo tài chính của cửa hàng
+   * - Ghi chú nội bộ của Admin (`noteAdmin`, `ghi chú quản trị`) hoặc thông tin cá nhân/danh sách khách hàng khác
+   */
+  private isConfidentialBusinessQuery(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    if (!normalized) return false;
+
+    const confidentialPatterns = [
+      // 1. Giá vốn, giá nhập hàng (trường `cost` trong bảng Product)
+      /(\bgiá\s*(vốn|nhập|gốc\s*nhập|nhập\s*kho)\b|\bcost\b\s*(nhập|của|sách|cuốn|là|bao\s*nhiêu)|giá\s*cost\b|nhập\s*vào\s*giá\s*bao\s*nhiêu|chi\s*phí\s*nhập\s*sách)/i,
+      // 2. Doanh thu, lợi nhuận, tiền lời, báo cáo tài chính của cửa hàng
+      /(\b(doanh\s*thu|doanh\s*số|lợi\s*nhuận|biên\s*lợi\s*nhuận|báo\s*cáo\s*tài\s*chính|sao\s*kê)\s*(của\s*(shop|cửa\s*hàng|bookstore|hiệu\s*sách)|tháng\s*này|năm\s*nay|hôm\s*nay|là\s*bao\s*nhiêu|bao\s*nhiêu)|^(doanh\s*thu|lợi\s*nhuận|doanh\s*số)\b|shop\s*(lãi|lời|kiếm\s*được|doanh\s*thu)\s*bao\s*nhiêu|lãi\s*mỗi\s*(cuốn|quyển))/i,
+      // 3. Dữ liệu quản trị nội bộ (noteAdmin, thông tin khách hàng khác, mật khẩu, khóa bí mật)
+      /(\bnoteadmin\b|ghi\s*chú\s*(nội\s*bộ|admin|quản\s*trị)|danh\s*sách\s*(khách\s*hàng|người\s*mua|tài\s*khoản)|số\s*điện\s*thoại\s*(của\s*)?khách|email\s*(của\s*)?khách\s*hàng\s*khác|\b(api[_\s]*key|secret[_\s]*key|database[_\s]*url)\b)/i,
+    ];
+
+    return confidentialPatterns.some((pattern) => pattern.test(normalized));
+  }
+
+  /**
    * Kiểm tra giới hạn phạm vi tư vấn (Domain Guardrail):
    * Phát hiện các câu hỏi hoàn toàn không liên quan đến việc mua bán sách hoặc tra cứu đơn hàng
    * (ví dụ: nhờ viết code/debug, giải phương trình toán/lý/hóa, hỏi thời tiết, kết quả bóng đá, xổ số, nấu ăn, y tế, chứng khoán...).
@@ -831,9 +787,9 @@ Nguyên tắc bắt buộc:
     const normalized = text.trim().toLowerCase();
     if (!normalized) return false;
 
-    // Nếu câu hỏi có chứa ngữ cảnh rõ ràng về sách, tác giả, xuất bản hoặc đơn hàng thì luôn CHO PHÉP
+    // Nếu câu hỏi có chứa ngữ cảnh rõ ràng về sách, tác giả, xuất bản, chính sách hoặc đơn hàng thì luôn CHO PHÉP
     const hasBookstoreContext =
-      /(sách|truyện|tiểu thuyết|tác phẩm|tác giả|nhà xuất bản|\bnxb\b|giỏ hàng|đơn hàng|mã đơn|\bord-|giao hàng|vận chuyển|bookstore)/i.test(
+      /(sách|truyện|tiểu thuyết|tác phẩm|tác giả|nhà xuất bản|\bnxb\b|giỏ hàng|đơn hàng|mã đơn|\bord-|giao hàng|vận chuyển|hoàn tiền|đổi trả|thanh toán|chính sách|bookstore)/i.test(
         normalized,
       );
 

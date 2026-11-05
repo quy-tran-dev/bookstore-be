@@ -9,8 +9,10 @@ import {
   ChatCartItem,
   ChatOrderSummary,
   ChatSuggestedProduct,
+  StorePolicyTopic,
   ToolExecutionOutcome,
 } from './interfaces/chat-assistant.interface';
+import { BOOKSTORE_STORE_POLICIES } from './constants/chat-assistant.constant';
 import { SectionBlock } from '../products/interfaces/section.interface';
 
 @Injectable()
@@ -152,12 +154,22 @@ export class ChatToolsService {
     }
 
     try {
-      // 1. Ưu tiên tìm theo slug chính xác hoặc tên sách gần giống
+      // 1. Ưu tiên tìm theo slug chính xác hoặc tên sách gần giống (chỉ select các cột công khai, tuyệt đối không lấy cột cost giá vốn)
       let product = await this.productRepository.findOne({
         where: [
           { slug: keyword, status: 1, isVerified: true },
           { name: ILike(`%${keyword}%`), status: 1, isVerified: true },
         ],
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          price: true,
+          finalPrice: true,
+          shortDescribe: true,
+          stockQuantity: true,
+          soldCount: true,
+        },
         relations: {
           bookDetail: true,
           categories: true,
@@ -176,6 +188,16 @@ export class ChatToolsService {
         if (hybridMatches && hybridMatches.length > 0 && hybridMatches[0]) {
           product = await this.productRepository.findOne({
             where: { id: hybridMatches[0].id },
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              price: true,
+              finalPrice: true,
+              shortDescribe: true,
+              stockQuantity: true,
+              soldCount: true,
+            },
             relations: {
               bookDetail: true,
               categories: true,
@@ -259,13 +281,22 @@ export class ChatToolsService {
       let orders: Order[] = [];
 
       if (cleanCode) {
-        // Tìm theo mã đơn hàng cụ thể
+        // Tìm theo mã đơn hàng cụ thể (chỉ select các trường công khai, tuyệt đối không lấy noteAdmin hoặc thông tin nhạy cảm)
         const whereCondition: any = { code: cleanCode };
         if (currentUserId) {
           whereCondition.user = { id: currentUserId };
         }
         const found = await this.orderRepository.findOne({
           where: whereCondition,
+          select: {
+            id: true,
+            code: true,
+            status: true,
+            paymentMethod: true,
+            paymentStatus: true,
+            finalAmount: true,
+            createdAt: true,
+          },
           relations: { items: true },
         });
         if (found) orders = [found];
@@ -273,6 +304,15 @@ export class ChatToolsService {
         // Khách đã đăng nhập hỏi chung về đơn hàng của mình -> Lấy 3 đơn gần nhất
         orders = await this.orderRepository.find({
           where: { user: { id: currentUserId } },
+          select: {
+            id: true,
+            code: true,
+            status: true,
+            paymentMethod: true,
+            paymentStatus: true,
+            finalAmount: true,
+            createdAt: true,
+          },
           relations: { items: true },
           order: { createdAt: 'DESC' },
           take: 3,
@@ -367,12 +407,22 @@ export class ChatToolsService {
 
         const requestedAmount = Math.max(1, Math.round(Number(reqItem.amount || 1)));
 
-        // 1. Tìm sách theo slug hoặc tên gần đúng
+        // 1. Tìm sách theo slug hoặc tên gần đúng (chỉ select trường công khai, không lấy cột cost)
         let product = await this.productRepository.findOne({
           where: [
             { slug: keyword, status: 1, isVerified: true },
             { name: ILike(`%${keyword}%`), status: 1, isVerified: true },
           ],
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            price: true,
+            finalPrice: true,
+            shortDescribe: true,
+            stockQuantity: true,
+            soldCount: true,
+          },
           relations: {
             albums: { media: true },
             categories: true,
@@ -390,6 +440,16 @@ export class ChatToolsService {
           if (hybridMatches && hybridMatches.length > 0 && hybridMatches[0]) {
             product = await this.productRepository.findOne({
               where: { id: hybridMatches[0].id },
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                price: true,
+                finalPrice: true,
+                shortDescribe: true,
+                stockQuantity: true,
+                soldCount: true,
+              },
               relations: {
                 albums: { media: true },
                 categories: true,
@@ -482,6 +542,48 @@ export class ChatToolsService {
         cartAction: null,
       };
     }
+  }
+
+  /**
+   * TOOL 5: Cung cấp thông tin chính sách chính thức của Bookstore (Hoàn tiền & Đổi trả, Vận chuyển, Thanh toán, Bản quyền sách).
+   * Giúp AI trả lời thống nhất theo quy định của cửa hàng mà không tự suy diễn sai chính sách.
+   */
+  async executeGetStorePolicy(args: {
+    topic?: StorePolicyTopic | string;
+  }): Promise<ToolExecutionOutcome> {
+    const rawTopic = (args.topic || 'general').toLowerCase().trim();
+
+    let selectedTopic: StorePolicyTopic = 'general';
+    if (/(refund|hoàn tiền|đổi trả|trả hàng|sách lỗi|rách)/i.test(rawTopic)) {
+      selectedTopic = 'refund';
+    } else if (/(shipping|vận chuyển|giao hàng|phí ship|ship)/i.test(rawTopic)) {
+      selectedTopic = 'shipping';
+    } else if (/(payment|thanh toán|cod|vnpay|chuyển khoản)/i.test(rawTopic)) {
+      selectedTopic = 'payment';
+    } else if (/(warranty|bảo hành|bản quyền|sách thật|chính hãng)/i.test(rawTopic)) {
+      selectedTopic = 'warranty';
+    }
+
+    const policyText =
+      selectedTopic === 'general'
+        ? [
+            BOOKSTORE_STORE_POLICIES.refund,
+            '',
+            BOOKSTORE_STORE_POLICIES.shipping,
+            '',
+            BOOKSTORE_STORE_POLICIES.payment,
+            '',
+            BOOKSTORE_STORE_POLICIES.warranty,
+          ].join('\n')
+        : BOOKSTORE_STORE_POLICIES[selectedTopic];
+
+    return {
+      toolName: 'getStorePolicyTool',
+      toolOutputText: policyText,
+      suggestedProducts: [],
+      referencedOrders: [],
+      cartAction: null,
+    };
   }
 
   /**

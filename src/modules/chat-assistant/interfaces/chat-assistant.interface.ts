@@ -15,7 +15,23 @@ export type AssistantToolName =
   | 'getBookDetailTool'
   | 'trackOrderTool'
   | 'prepareAddToCartTool'
-  | 'confirmAddToCartTool';
+  | 'confirmAddToCartTool'
+  | 'getStorePolicyTool';
+
+/**
+ * Các chủ đề chính sách của cửa hàng Bookstore:
+ * - refund: Chính sách đổi trả & hoàn tiền
+ * - shipping: Chính sách vận chuyển & phí giao hàng
+ * - payment: Phương thức thanh toán
+ * - warranty: Cam kết sách chính hãng & bảo vệ người mua
+ * - general: Tổng hợp toàn bộ chính sách
+ */
+export type StorePolicyTopic =
+  | 'refund'
+  | 'shipping'
+  | 'payment'
+  | 'warranty'
+  | 'general';
 
 /**
  * Trạng thái thao tác thêm giỏ hàng nhanh qua Trợ lý AI:
