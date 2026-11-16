@@ -25,13 +25,15 @@ export type AssistantToolName =
  * - payment: Phương thức thanh toán
  * - warranty: Cam kết sách chính hãng & bảo vệ người mua
  * - general: Tổng hợp toàn bộ chính sách
+ * - unsupported: Các chính sách hoặc tính năng nằm ngoài phạm vi hỗ trợ của Bookstore
  */
 export type StorePolicyTopic =
   | 'refund'
   | 'shipping'
   | 'payment'
   | 'warranty'
-  | 'general';
+  | 'general'
+  | 'unsupported';
 
 /**
  * Trạng thái thao tác thêm giỏ hàng nhanh qua Trợ lý AI:

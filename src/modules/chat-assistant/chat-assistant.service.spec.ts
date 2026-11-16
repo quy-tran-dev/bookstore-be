@@ -330,4 +330,74 @@ describe('ChatAssistantService - Kiểm thử Trợ lý AI Tư vấn Khách hàn
     expect(res.reply).toContain('Chính sách Đổi trả & Hoàn tiền');
     expect(res.reply).toContain('7 ngày');
   });
+
+  it('phải nhận diện câu hỏi về chính sách chưa hỗ trợ (trả góp, tích điểm...) và trả về thông báo ngoài phạm vi khả năng chứ không tự bịa đặt', async () => {
+    mockChatToolsService.executeGetStorePolicy.mockResolvedValueOnce({
+      toolName: 'getStorePolicyTool',
+      toolOutputText:
+        '📌 **Thông báo về phạm vi chính sách tại Bookstore:** Hiện tại Bookstore chưa hỗ trợ hoặc chưa có chính sách chính thức cho yêu cầu này. Các chính sách hoặc dịch vụ khác (như mua trả góp, tích điểm hội viên, xuất hóa đơn VAT...) hiện nằm ngoài phạm vi hỗ trợ của hệ thống.',
+      suggestedProducts: [],
+      referencedOrders: [],
+      cartAction: null,
+    });
+
+    const res = await service.handleUserMessage({
+      message: 'Shop có chính sách mua sách trả góp hoặc tích điểm thành viên không?',
+      sessionId: 'sess-policy-unsupported',
+    });
+
+    expect(mockChatToolsService.executeGetStorePolicy).toHaveBeenCalledWith({
+      topic:
+        'Shop có chính sách mua sách trả góp hoặc tích điểm thành viên không?',
+    });
+    expect(res.usedTool).toBe('getStorePolicyTool');
+    expect(res.reply).toContain('chưa hỗ trợ hoặc chưa có chính sách chính thức');
+    expect(res.reply).toContain('nằm ngoài phạm vi hỗ trợ');
+  });
+});
+
+describe('ChatToolsService - Kiểm thử khoanh vùng chính sách và chống bịa đặt (executeGetStorePolicy)', () => {
+  let toolsService: ChatToolsService;
+
+  beforeEach(() => {
+    toolsService = new ChatToolsService(null as any, null as any, null as any);
+  });
+
+  it('phải trả về chính sách Đổi trả & Hoàn tiền chính thức khi hỏi về refund / đổi trả / sách lỗi', async () => {
+    const outcome = await toolsService.executeGetStorePolicy({
+      topic: 'Sách giao bị rách trang thì đổi trả như thế nào?',
+    });
+    expect(outcome.toolName).toBe('getStorePolicyTool');
+    expect(outcome.toolOutputText).toContain('Chính sách Đổi trả & Hoàn tiền');
+    expect(outcome.toolOutputText).toContain('7 ngày');
+  });
+
+  it('phải trả về chính sách Vận chuyển chính thức khi hỏi về ship / giao hàng', async () => {
+    const outcome = await toolsService.executeGetStorePolicy({
+      topic: 'Phí ship giao hàng về tỉnh là bao nhiêu?',
+    });
+    expect(outcome.toolName).toBe('getStorePolicyTool');
+    expect(outcome.toolOutputText).toContain('Chính sách Vận chuyển & Giao hàng');
+    expect(outcome.toolOutputText).toContain('30.000đ');
+  });
+
+  it('phải trả về thông báo ngoài phạm vi hỗ trợ (unsupported) khi hỏi các chính sách không hỗ trợ như trả góp, tích điểm, CTV, hóa đơn đỏ', async () => {
+    const unsupportedQueries = [
+      'Shop có chính sách trả góp qua thẻ tín dụng không?',
+      'Chính sách tích điểm thành viên VIP đổi voucher giảm giá',
+      'Tuyển cộng tác viên bán sách và chiết khấu sỉ đại lý',
+      'Chính sách xuất hóa đơn VAT đỏ cho doanh nghiệp',
+      'Shop có chính sách thu mua lại sách cũ không?',
+    ];
+
+    for (const q of unsupportedQueries) {
+      const outcome = await toolsService.executeGetStorePolicy({ topic: q });
+      expect(outcome.toolName).toBe('getStorePolicyTool');
+      expect(outcome.toolOutputText).toContain(
+        'chưa hỗ trợ hoặc chưa có chính sách chính thức',
+      );
+      expect(outcome.toolOutputText).toContain('nằm ngoài phạm vi hỗ trợ');
+      expect(outcome.toolOutputText).toContain('1. 🔁 **Đổi trả & Hoàn tiền');
+    }
+  });
 });

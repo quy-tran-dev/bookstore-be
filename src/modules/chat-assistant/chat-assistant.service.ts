@@ -213,9 +213,10 @@ export class ChatAssistantService {
 
   /**
    * Lấy lịch sử trò chuyện của một phiên (sessionId) từ Redis Cache
+   * (Có kiểm tra định dạng sessionId để chống tấn công Redis Key Injection)
    */
   async getSessionHistory(sessionId: string): Promise<ChatHistoryEntry[]> {
-    if (!sessionId) return [];
+    if (!this.isValidSessionId(sessionId)) return [];
     const cached = await this.cacheManager.get<ChatHistoryEntry[]>(
       this.buildSessionCacheKey(sessionId),
     );
@@ -223,11 +224,14 @@ export class ChatAssistantService {
   }
 
   /**
-   * Xóa lịch sử trò chuyện của một phiên (làm mới cuộc hội thoại)
+   * Xóa lịch sử trò chuyện và giỏ hàng tạm của một phiên (làm mới cuộc hội thoại)
    */
   async clearSessionHistory(sessionId: string): Promise<{ cleared: boolean }> {
-    if (!sessionId) return { cleared: false };
-    await this.cacheManager.del(this.buildSessionCacheKey(sessionId));
+    if (!this.isValidSessionId(sessionId)) return { cleared: false };
+    await Promise.all([
+      this.cacheManager.del(this.buildSessionCacheKey(sessionId)),
+      this.cacheManager.del(this.buildPendingCartCacheKey(sessionId)),
+    ]);
     return { cleared: true };
   }
 
@@ -286,6 +290,7 @@ export class ChatAssistantService {
           fnName,
           fnArgs,
           currentUserId,
+          userMessage,
         );
 
         // Bước 2: Đưa kết quả thực thi Tool quay lại cho Gemini để diễn đạt câu trả lời hoàn chỉnh
@@ -385,9 +390,17 @@ export class ChatAssistantService {
       };
     }
 
-    // 2. Nhận diện câu hỏi về Chính sách cửa hàng (Hoàn tiền, Đổi trả, Phí ship, Giao hàng, Thanh toán, Bản quyền)
+    // 2. Nhận diện câu hỏi về Chính sách cửa hàng
+    // (Bao gồm các chính sách đã có: Đổi trả, Hoàn tiền, Phí ship, Giao hàng, Thanh toán, Bản quyền sách
+    // VÀ các chính sách nằm ngoài phạm vi hỗ trợ: Trả góp, Tích điểm, Hội viên, CTV, Đại lý, Hóa đơn VAT...)
+    // Lưu ý: Loại trừ trường hợp khách đang chủ động tìm mua sách về các chủ đề đó (VD: "Tìm sách hướng dẫn lập hóa đơn VAT")
+    const isExplicitBookSearchOrCart =
+      /(tìm (sách|cuốn|quyển|truyện)|gợi ý (sách|cuốn)|tư vấn (sách|cuốn)|(sách|cuốn|quyển) (dạy|về|hướng dẫn|học)|thêm.*vào giỏ|bỏ.*vào giỏ)/i.test(
+        lower,
+      );
     const isStorePolicyIntent =
-      /(chính sách|hoàn tiền|đổi trả|trả hàng|đổi sách|sách (bị )?(lỗi|rách|móp|hư)|phí (ship|vận chuyển|giao hàng)|giao hàng (mất )?bao lâu|bao giờ nhận được|đồng kiểm|thanh toán (như thế nào|qua đâu|bằng cách nào|cod|vnpay)|chuyển khoản|sách (giả|thật|lậu|bản quyền|chính hãng))/i.test(
+      !isExplicitBookSearchOrCart &&
+      /(chính sách|quy định|điều khoản|hoàn tiền|đổi trả|trả hàng|đổi sách|sách (bị )?(lỗi|rách|móp|hư)|phí (ship|vận chuyển|giao hàng)|giao hàng (mất )?bao lâu|bao giờ nhận được|đồng kiểm|thanh toán (như thế nào|qua đâu|bằng cách nào|cod|vnpay)|chuyển khoản|sách (giả|thật|lậu|bản quyền|chính hãng)|trả góp|tích điểm|(thẻ|hạng) (thành viên|hội viên|\bvip\b)|hóa đơn (vat|đỏ)|tuyển (dụng|ctv|cộng tác viên)|làm đại lý|mua sỉ|chiết khấu sỉ|thu mua sách)/i.test(
         lower,
       );
 
@@ -476,6 +489,7 @@ export class ChatAssistantService {
     toolName: AssistantToolName,
     args: Record<string, any>,
     currentUserId?: string,
+    rawUserMessage?: string,
   ): Promise<ToolExecutionOutcome> {
     switch (toolName) {
       case 'searchBooksTool':
@@ -501,10 +515,16 @@ export class ChatAssistantService {
         return this.chatToolsService.executePrepareAddToCart({
           items: Array.isArray(args.items) ? args.items : [],
         });
-      case 'getStorePolicyTool':
+      case 'getStorePolicyTool': {
+        // Kết hợp cả tham số topic của Gemini lẫn câu hỏi gốc của khách để chống trường hợp Gemini truyền topic="general" cho chính sách chưa hỗ trợ
+        const combinedTopic = [args.topic, rawUserMessage]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
         return this.chatToolsService.executeGetStorePolicy({
-          topic: args.topic ? String(args.topic) : 'general',
+          topic: combinedTopic || 'general',
         });
+      }
       default:
         return this.chatToolsService.executeSearchBooks({
           query: String(args.query || ''),
@@ -746,12 +766,20 @@ export class ChatAssistantService {
   }
 
   /**
-   * Kiểm tra các mẫu câu cố tình vượt quyền điều khiển hệ thống (Prompt Injection)
+   * Kiểm tra các mẫu câu cố tình vượt quyền điều khiển hệ thống (Prompt Injection & Jailbreak)
    */
   private isPromptInjectionAttempt(text: string): boolean {
-    return /(ignore (all )?previous instructions|system prompt|bỏ qua (mọi |tất cả )?hướng dẫn trước|tiết lộ cấu hình hệ thống|drop table|delete from)/i.test(
+    return /(ignore (all )?(previous|prior) instructions|system (prompt|instruction)|developer mode|\bdan mode\b|jailbreak|bỏ qua (mọi |tất cả )?(hướng dẫn|quy tắc|ràng buộc)|hãy đóng vai|giả vờ bạn (là|không phải)|tiết lộ cấu hình hệ thống|drop table|delete from)/i.test(
       text,
     );
+  }
+
+  /**
+   * Kiểm tra tính hợp lệ của mã phiên trò chuyện (chống Redis Key Injection)
+   */
+  private isValidSessionId(sessionId?: string): boolean {
+    if (!sessionId) return false;
+    return /^[a-zA-Z0-9_-]{1,100}$/.test(sessionId.trim());
   }
 
   /**
@@ -789,7 +817,7 @@ export class ChatAssistantService {
 
     // Nếu câu hỏi có chứa ngữ cảnh rõ ràng về sách, tác giả, xuất bản, chính sách hoặc đơn hàng thì luôn CHO PHÉP
     const hasBookstoreContext =
-      /(sách|truyện|tiểu thuyết|tác phẩm|tác giả|nhà xuất bản|\bnxb\b|giỏ hàng|đơn hàng|mã đơn|\bord-|giao hàng|vận chuyển|hoàn tiền|đổi trả|thanh toán|chính sách|bookstore)/i.test(
+      /(sách|truyện|tiểu thuyết|tác phẩm|tác giả|nhà xuất bản|\bnxb\b|giỏ hàng|đơn hàng|mã đơn|\bord-|giao hàng|vận chuyển|hoàn tiền|đổi trả|thanh toán|chính sách|quy định|trả góp|tích điểm|thành viên|hội viên|hóa đơn|cộng tác viên|đại lý|bookstore)/i.test(
         normalized,
       );
 

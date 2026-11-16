@@ -12,7 +12,10 @@ import {
   StorePolicyTopic,
   ToolExecutionOutcome,
 } from './interfaces/chat-assistant.interface';
-import { BOOKSTORE_STORE_POLICIES } from './constants/chat-assistant.constant';
+import {
+  BOOKSTORE_STORE_POLICIES,
+  BOOKSTORE_UNSUPPORTED_POLICY_REPLY,
+} from './constants/chat-assistant.constant';
 import { SectionBlock } from '../products/interfaces/section.interface';
 
 @Injectable()
@@ -547,35 +550,61 @@ export class ChatToolsService {
   /**
    * TOOL 5: Cung cấp thông tin chính sách chính thức của Bookstore (Hoàn tiền & Đổi trả, Vận chuyển, Thanh toán, Bản quyền sách).
    * Giúp AI trả lời thống nhất theo quy định của cửa hàng mà không tự suy diễn sai chính sách.
+   * Nếu khách hỏi chính sách chưa được hỗ trợ, trả về văn bản thông báo ngoài phạm vi khả năng rõ ràng.
    */
   async executeGetStorePolicy(args: {
     topic?: StorePolicyTopic | string;
   }): Promise<ToolExecutionOutcome> {
-    const rawTopic = (args.topic || 'general').toLowerCase().trim();
+    const rawTopic = (args.topic || '').toLowerCase().trim();
+
+    // 1. Nhận diện các câu hỏi về chính sách/tính năng nằm ngoài phạm vi hỗ trợ của Bookstore
+    // (như mua trả góp, tích điểm hội viên, chiết khấu đại lý/sỉ, tuyển dụng CTV, hóa đơn VAT công ty, đổi sách cũ, tài trợ...)
+    const isExplicitlyUnsupported =
+      /(trả\s*góp|tích\s*điểm|thành\s*viên|hội\s*viên|\bvip\b|sinh\s*nhật|tuyển\s*dụng|cộng\s*tác\s*viên|\bctv\b|đại\s*lý|mua\s*sỉ|chiết\s*khấu\s*sỉ|hóa\s*đơn\s*(đỏ|vat|công\s*ty)|thu\s*mua\s*sách|thuê\s*sách|đổi\s*sách\s*cũ|bảo\s*hiểm|tài\s*trợ|bọc\s*sách)/i.test(
+        rawTopic,
+      );
 
     let selectedTopic: StorePolicyTopic = 'general';
-    if (/(refund|hoàn tiền|đổi trả|trả hàng|sách lỗi|rách)/i.test(rawTopic)) {
+
+    if (isExplicitlyUnsupported || rawTopic === 'unsupported') {
+      selectedTopic = 'unsupported';
+    } else if (/(refund|hoàn tiền|đổi trả|trả hàng|sách lỗi|rách|hư hỏng)/i.test(rawTopic)) {
       selectedTopic = 'refund';
-    } else if (/(shipping|vận chuyển|giao hàng|phí ship|ship)/i.test(rawTopic)) {
+    } else if (/(shipping|vận chuyển|giao hàng|phí ship|ship|bao lâu nhận)/i.test(rawTopic)) {
       selectedTopic = 'shipping';
-    } else if (/(payment|thanh toán|cod|vnpay|chuyển khoản)/i.test(rawTopic)) {
+    } else if (/(payment|thanh toán|cod|vnpay|chuyển khoản|tiền mặt)/i.test(rawTopic)) {
       selectedTopic = 'payment';
-    } else if (/(warranty|bảo hành|bản quyền|sách thật|chính hãng)/i.test(rawTopic)) {
+    } else if (/(warranty|bảo hành|bản quyền|sách thật|chính hãng|sách giả|sách lậu)/i.test(rawTopic)) {
       selectedTopic = 'warranty';
+    } else if (
+      !rawTopic ||
+      /(general|tổng hợp|tất cả chính sách|toàn bộ chính sách|chính sách mua hàng|chính sách của shop)/i.test(
+        rawTopic,
+      )
+    ) {
+      selectedTopic = 'general';
+    } else {
+      // Khi khách hỏi một chính sách cụ thể nhưng không thuộc 4 chính sách chính thức đã ban hành
+      // -> Đưa về unsupported để AI không tự ý phỏng đoán hoặc bịa đặt chính sách
+      selectedTopic = 'unsupported';
     }
 
-    const policyText =
-      selectedTopic === 'general'
-        ? [
-            BOOKSTORE_STORE_POLICIES.refund,
-            '',
-            BOOKSTORE_STORE_POLICIES.shipping,
-            '',
-            BOOKSTORE_STORE_POLICIES.payment,
-            '',
-            BOOKSTORE_STORE_POLICIES.warranty,
-          ].join('\n')
-        : BOOKSTORE_STORE_POLICIES[selectedTopic];
+    let policyText: string;
+    if (selectedTopic === 'unsupported') {
+      policyText = BOOKSTORE_UNSUPPORTED_POLICY_REPLY;
+    } else if (selectedTopic === 'general') {
+      policyText = [
+        BOOKSTORE_STORE_POLICIES.refund,
+        '',
+        BOOKSTORE_STORE_POLICIES.shipping,
+        '',
+        BOOKSTORE_STORE_POLICIES.payment,
+        '',
+        BOOKSTORE_STORE_POLICIES.warranty,
+      ].join('\n');
+    } else {
+      policyText = BOOKSTORE_STORE_POLICIES[selectedTopic];
+    }
 
     return {
       toolName: 'getStorePolicyTool',

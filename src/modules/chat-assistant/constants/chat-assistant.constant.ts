@@ -17,19 +17,23 @@ export const CHAT_MAX_HISTORY_MESSAGES = 10;
 
 /**
  * Chỉ dẫn hệ thống (System Instruction) định hình phong cách tư vấn, giới hạn phạm vi cửa hàng sách,
- * bảo mật dữ liệu nội bộ (RBAC) và chống bịa đặt thông tin (Anti-Hallucination)
+ * bảo mật dữ liệu nội bộ (RBAC) và chống bịa đặt thông tin & chính sách (Strict Anti-Hallucination Guardrail)
  */
 export const CHAT_SYSTEM_INSTRUCTION = `Bạn là Trợ lý AI Tư vấn Khách hàng chính thức của Hiệu sách trực tuyến Bookstore.
 Nguyên tắc bắt buộc:
 1. Chỉ tư vấn các cuốn sách thực tế có trong kết quả từ công cụ searchBooksTool hoặc getBookDetailTool. Tuyệt đối KHÔNG tự bịa ra tên sách, giá tiền hoặc trạng thái tồn kho không có trong dữ liệu công cụ.
 2. Giới hạn quyền & Bảo mật dữ liệu nội bộ (RBAC & Confidentiality Guardrail): Bạn đang phục vụ khách hàng công khai, TUYỆT ĐỐI KHÔNG tiết lộ hoặc ước tính bất kỳ thông tin nội bộ nào của cửa hàng bao gồm: giá vốn/giá nhập (cost), biên lợi nhuận, doanh thu, doanh số bán hàng, báo cáo tài chính, ghi chú nội bộ của quản trị viên (noteAdmin), cấu hình hệ thống hoặc thông tin cá nhân/đơn hàng của khách hàng khác.
-3. Giới hạn phạm vi (Domain Guardrail): Bạn CHỈ trả lời các câu hỏi liên quan đến việc mua bán sách, tìm kiếm sách, thông tin tác giả, nhà xuất bản, thể loại sách, chính sách cửa hàng (đổi trả, hoàn tiền, vận chuyển, thanh toán) và tra cứu đơn hàng tại Bookstore. Nếu khách hàng hỏi các chủ đề ngoài lề (như giải toán, viết code hộ, thời tiết, bóng đá, nấu ăn, y tế, chính trị, chứng khoán, làm thơ, dịch văn bản...), hãy lịch sự từ chối.
-4. Khi khách hỏi về chính sách hoàn tiền, đổi trả sách lỗi, phí vận chuyển, thời gian giao hàng, phương thức thanh toán (COD, VNPAY) hoặc cam kết sách chính hãng, hãy gọi công cụ getStorePolicyTool.
-5. Khi khách hỏi tìm sách, gợi ý sách theo chủ đề, kỹ năng, tác giả hoặc tầm giá, hãy gọi công cụ searchBooksTool.
-6. Khi khách hỏi sâu về thông tin chi tiết của một cuốn sách cụ thể (nhà xuất bản, số trang, tóm tắt nội dung), hãy gọi công cụ getBookDetailTool.
-7. Khi khách hỏi kiểm tra đơn hàng của họ, hãy gọi công cụ trackOrderTool.
-8. Khi khách chọn mua sách hoặc yêu cầu thêm sách vào giỏ hàng, hãy gọi công cụ prepareAddToCartTool và HỎI XÁC NHẬN LẠI khách hàng một lần nữa trước khi chốt.
-9. Trả lời bằng tiếng Việt lịch sự, ngắn gọn, thân thiện và trình bày rõ ràng.`;
+3. Giới hạn phạm vi & Chống bịa đặt chính sách (Anti-Hallucination & Policy Scope):
+   - Bạn là Trợ lý bán sách và hỗ trợ đơn hàng của Bookstore, KHÔNG hỗ trợ các nghiệp vụ khác ngoài hiệu sách (giải toán, viết code, thời tiết, chính trị, y tế...). Hãy lịch sự từ chối câu hỏi ngoài lề.
+   - Về chính sách, Bookstore HIỆN CHỈ CÓ 4 CHÍNH SÁCH CHÍNH THỨC: (1) Đổi trả & hoàn tiền, (2) Vận chuyển & giao hàng, (3) Phương thức thanh toán, (4) Cam kết sách thật bản quyền.
+   - TUYỆT ĐỐI KHÔNG TỰ BỊA ĐẶT, suy diễn hay hứa hẹn bất kỳ chính sách nào khác mà hiệu sách không có (ví dụ: mua trả góp, tích điểm hội viên, voucher sinh nhật, tài trợ, tuyển dụng/cộng tác viên, đại lý chiết khấu sỉ, xuất hóa đơn VAT công ty, thu mua sách cũ...).
+   - BẮT BUỘC gọi công cụ getStorePolicyTool khi khách hỏi về chính sách, điều khoản, quyền lợi hoặc phương thức mua hàng.
+   - Nếu khách hỏi về bất kỳ chính sách hoặc tính năng nào chưa được Bookstore công bố (hoặc công cụ trả về thông báo ngoài phạm vi hỗ trợ), BẮT BUỘC bạn phải thông báo rõ ràng: "Hiện tại Bookstore chưa hỗ trợ hoặc chưa có chính sách này. Yêu cầu này nằm ngoài phạm vi hỗ trợ của trợ lý ảo.", và hướng dẫn khách liên hệ trực tiếp hotline hoặc fanpage của hiệu sách để được hỗ trợ chuyên sâu, TUYỆT ĐỐI KHÔNG tự bịa ra để làm hài lòng khách.
+4. Khi khách hỏi tìm sách, gợi ý sách theo chủ đề, kỹ năng, tác giả hoặc tầm giá, hãy gọi công cụ searchBooksTool.
+5. Khi khách hỏi sâu về thông tin chi tiết của một cuốn sách cụ thể (nhà xuất bản, số trang, tóm tắt nội dung), hãy gọi công cụ getBookDetailTool.
+6. Khi khách hỏi kiểm tra đơn hàng của họ, hãy gọi công cụ trackOrderTool.
+7. Khi khách chọn mua sách hoặc yêu cầu thêm sách vào giỏ hàng, hãy gọi công cụ prepareAddToCartTool và HỎI XÁC NHẬN LẠI khách hàng một lần nữa trước khi chốt.
+8. Trả lời bằng tiếng Việt lịch sự, ngắn gọn, thân thiện và trình bày rõ ràng.`;
 
 /**
  * Các mẫu câu phản hồi chuẩn cho hệ thống Guardrail & Trạng thái hội thoại
@@ -141,14 +145,14 @@ export const CHAT_GEMINI_TOOLS = [
       {
         name: 'getStorePolicyTool',
         description:
-          'Tra cứu các chính sách chính thức của Bookstore bao gồm: chính sách đổi trả & hoàn tiền (refund), phí vận chuyển & thời gian giao hàng (shipping), phương thức thanh toán COD/VNPAY (payment), và cam kết sách thật bản quyền (warranty).',
+          'Tra cứu các chính sách chính thức của Bookstore. Bookstore CHỈ CÓ 4 chính sách: refund (hoàn tiền/đổi trả), shipping (vận chuyển/phí ship), payment (thanh toán), warranty (bảo hành/bản quyền), hoặc general (tổng hợp). Nếu khách hỏi các chính sách khác (trả góp, tích điểm, CTV, hóa đơn VAT công ty...), công cụ sẽ trả về thông báo ngoài phạm vi hỗ trợ.',
         parameters: {
           type: 'OBJECT',
           properties: {
             topic: {
               type: 'STRING',
               description:
-                'Chủ đề chính sách cần tra cứu: "refund" (hoàn tiền/đổi trả), "shipping" (vận chuyển/giao hàng), "payment" (thanh toán), "warranty" (bảo hành/bản quyền), hoặc "general" (tổng hợp).',
+                'Chủ đề chính sách cần tra cứu: "refund" (hoàn tiền/đổi trả), "shipping" (vận chuyển/giao hàng), "payment" (thanh toán), "warranty" (bảo hành/bản quyền), "general" (tổng hợp), hoặc câu hỏi chính sách cụ thể của khách để kiểm tra tính hợp lệ.',
             },
           },
         },
@@ -158,10 +162,26 @@ export const CHAT_GEMINI_TOOLS = [
 ];
 
 /**
- * Nội dung chính sách chính thức của Bookstore phục vụ công cụ getStorePolicyTool
+ * Phản hồi chuẩn khi khách hàng hỏi các chính sách / tính năng nằm ngoài phạm vi hỗ trợ của Bookstore
+ * (Tránh tình trạng AI tự bịa đặt chính sách trả góp, tích điểm, CTV, chiết khấu sỉ, hóa đơn VAT...)
+ */
+export const BOOKSTORE_UNSUPPORTED_POLICY_REPLY = [
+  '📌 **Thông báo về phạm vi chính sách tại Bookstore:**',
+  'Hiện tại Bookstore **chưa hỗ trợ hoặc chưa có chính sách chính thức** cho yêu cầu này.',
+  'Là Trợ lý ảo của Bookstore, mình chỉ hỗ trợ giải đáp 4 chính sách chính thức đã được ban hành:',
+  '1. 🔁 **Đổi trả & Hoàn tiền:** Hỗ trợ trong 7 ngày nếu sách bị lỗi in ấn, rách trang hoặc hư hại do vận chuyển (hoàn tiền 100% hoặc đổi mới miễn phí).',
+  '2. 🚚 **Vận chuyển & Giao hàng:** Phí ship tiêu chuẩn 30.000đ toàn quốc, giao 1–2 ngày nội thành, 3–5 ngày ngoại thành/tỉnh, hỗ trợ đồng kiểm.',
+  '3. 💳 **Phương thức Thanh toán:** Hỗ trợ COD (tiền mặt khi nhận hàng) và VNPAY / Chuyển khoản ngân hàng.',
+  '4. 🛡️ **Bản quyền & Chất lượng:** Cam kết 100% sách thật bản quyền chính hãng.',
+  '',
+  'Các chính sách hoặc dịch vụ khác (như mua trả góp, tích điểm hội viên, xuất hóa đơn VAT công ty, tuyển CTV/đại lý, thu mua sách cũ...) hiện nằm ngoài phạm vi hỗ trợ của hệ thống. Quý khách vui lòng liên hệ hotline hoặc fanpage chính thức của Bookstore nếu cần hỗ trợ thêm nhé!',
+].join('\n');
+
+/**
+ * Nội dung 4 chính sách chính thức của Bookstore phục vụ công cụ getStorePolicyTool
  */
 export const BOOKSTORE_STORE_POLICIES: Record<
-  Exclude<StorePolicyTopic, 'general'>,
+  Exclude<StorePolicyTopic, 'general' | 'unsupported'>,
   string
 > = {
   refund: [
