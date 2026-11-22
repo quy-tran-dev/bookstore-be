@@ -23,6 +23,7 @@ import { PaymentModule } from './modules/payment/payment.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { SeoAuditModule } from './modules/seo-audit/seo-audit.module';
 import { ChatAssistantModule } from './modules/chat-assistant/chat-assistant.module';
+import { RecommendationsModule } from './modules/recommendations/recommendations.module';
 import { CacheModule } from '@nestjs/cache-manager';
 
 const INLINE_IMAGE_EXTENSIONS = new Set([
@@ -94,6 +95,7 @@ const INLINE_IMAGE_EXTENSIONS = new Set([
     AnalyticsModule,
     SeoAuditModule,
     ChatAssistantModule,
+    RecommendationsModule,
   ],
   controllers: [AppController],
   providers,

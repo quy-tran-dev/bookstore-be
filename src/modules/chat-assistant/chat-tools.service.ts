@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Repository } from 'typeorm';
 import { ProductsService } from '../products/products.service';
 import { Product } from '../products/entities/product.entity';
 import { Order } from '../orders/entities/order.entity';
 import { OrderStatus } from '@app/common/enums/order-status.enum';
+import { RecommendationsService } from '../recommendations/recommendations.service';
 import {
   ChatCartItem,
   ChatOrderSummary,
@@ -28,6 +29,8 @@ export class ChatToolsService {
     private readonly productRepository: Repository<Product>,
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
+    @Optional()
+    private readonly recommendationsService?: RecommendationsService,
   ) {}
 
   /**
@@ -613,6 +616,114 @@ export class ChatToolsService {
       referencedOrders: [],
       cartAction: null,
     };
+  }
+
+  /**
+   * TOOL 6: Gợi ý các cuốn sách tương tự thuần ngữ nghĩa AI (Option A: Pure Semantic Similarity qua pgvector Cosine Distance <=>).
+   * Khi khách hỏi: "Có cuốn nào giống cuốn Nhà Giả Kim không?", công cụ này tìm sách gốc rồi gọi RecommendationsService.getSimilarBooks().
+   */
+  async executeGetSimilarBooks(args: {
+    slugOrName: string;
+    limit?: number;
+  }): Promise<ToolExecutionOutcome> {
+    const keyword = (args.slugOrName || '').trim();
+    if (!keyword) {
+      return {
+        toolName: 'getSimilarBooksTool',
+        toolOutputText:
+          'Chưa xác định được tên cuốn sách gốc mà khách hàng muốn tìm sách tương tự.',
+        suggestedProducts: [],
+      };
+    }
+
+    try {
+      // Bước 1: Tìm cuốn sách gốc theo slug hoặc tên gần đúng
+      let sourceProduct = await this.productRepository.findOne({
+        where: [
+          { slug: keyword, status: 1, isVerified: true },
+          { name: ILike(`%${keyword}%`), status: 1, isVerified: true },
+        ],
+        select: { id: true, name: true, slug: true },
+      });
+
+      if (!sourceProduct && this.productsService) {
+        const hybridMatches = await this.productsService.searchHybridB(
+          keyword,
+          1,
+          { alpha: 0.7, threshold: 0.65, minScore: 0.25 },
+        );
+        if (hybridMatches && hybridMatches.length > 0 && hybridMatches[0]) {
+          sourceProduct = {
+            id: hybridMatches[0].id,
+            name: hybridMatches[0].name,
+            slug: hybridMatches[0].slug,
+          } as Product;
+        }
+      }
+
+      if (!sourceProduct || !this.recommendationsService) {
+        return {
+          toolName: 'getSimilarBooksTool',
+          toolOutputText: `Không tìm thấy cuốn sách gốc "${keyword}" trong cửa hàng để gợi ý sách tương tự.`,
+          suggestedProducts: [],
+        };
+      }
+
+      const simResult = await this.recommendationsService.getSimilarBooks(
+        sourceProduct.slug || sourceProduct.id,
+        args.limit ?? 5,
+        0.6,
+      );
+
+      const suggestedProducts: ChatSuggestedProduct[] = simResult.items.map(
+        (item) => ({
+          id: item.id,
+          name: item.name,
+          slug: item.slug,
+          price: item.price,
+          finalPrice: item.finalPrice,
+          shortDescribe: item.shortDescribe,
+          stockQuantity: item.stockQuantity,
+          soldCount: item.soldCount,
+          thumbnailUrl: item.thumbnailUrl,
+          categories: item.categories,
+          authors: item.authors,
+        }),
+      );
+
+      if (suggestedProducts.length === 0) {
+        return {
+          toolName: 'getSimilarBooksTool',
+          toolOutputText: `Hiện chưa tìm thấy cuốn sách nào có độ tương đồng ngữ nghĩa trên 60% với cuốn "${sourceProduct.name}".`,
+          suggestedProducts: [],
+        };
+      }
+
+      const lines = simResult.items.map(
+        (item, idx) =>
+          `${idx + 1}. "${item.name}" — Giá: ${item.finalPrice.toLocaleString('vi-VN')}đ | Độ tương đồng AI: ${
+            item.similarityScore !== null
+              ? `${Math.round(item.similarityScore * 100)}%`
+              : 'Thịnh hành'
+          } (${item.recommendationReason})`,
+      );
+
+      return {
+        toolName: 'getSimilarBooksTool',
+        toolOutputText: `Danh sách ${simResult.items.length} cuốn sách có nội dung tương đồng nhất với cuốn "${sourceProduct.name}":\n${lines.join('\n')}`,
+        suggestedProducts,
+      };
+    } catch (error: any) {
+      this.logger.error(
+        `Lỗi khi thực thi getSimilarBooksTool: ${error?.message || error}`,
+      );
+      return {
+        toolName: 'getSimilarBooksTool',
+        toolOutputText:
+          'Không thể phân tích sách tương tự ngay lúc này, vui lòng thử lại sau.',
+        suggestedProducts: [],
+      };
+    }
   }
 
   /**
