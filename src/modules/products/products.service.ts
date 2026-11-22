@@ -606,7 +606,11 @@ export class ProductsService extends BaseService<Product> {
     );
 
     const targetWords = meaningfulWords.length > 0 ? meaningfulWords : words;
-    const operator = useOr ? ' | ' : ' & ';
+    // Toán tử FTS thích ứng (Adaptive FTS Operator):
+    // - Nếu truy vấn ngắn (<= 3 từ có nghĩa, thường là tên sách cụ thể như "Clean Code", "Đắc Nhân Tâm"): dùng '&' (AND) để khớp chặt mặt chữ.
+    // - Nếu truy vấn dài (> 3 từ có nghĩa, câu hỏi diễn giải ngữ nghĩa): tự động dùng '|' (OR) để FTS vẫn cộng điểm thưởng cho các sách khớp một phần từ khóa quan trọng.
+    const adaptiveOr = useOr || targetWords.length > 3;
+    const operator = adaptiveOr ? ' | ' : ' & ';
 
     return targetWords.map((word) => `${word}:*`).join(operator);
   }
@@ -768,6 +772,16 @@ export class ProductsService extends BaseService<Product> {
     return formattedProducts;
   }
 
+  /**
+   * THUẬT TOÁN TÌM KIẾM LAI CHÍNH THỨC (HYBRID SEARCH B: COSINE VECTOR + FULL-TEXT SEARCH)
+   * ---------------------------------------------------------------------------------------
+   * Thông số tối ưu từ thực nghiệm Information Retrieval (NDCG@5, MRR@5, Hit@K, TNR):
+   * - Tỷ lệ lai tối ưu: Alpha = 0.70 (70% Vector AI MiniLM - 30% Full-Text Search)
+   * - Biên độ ngưỡng khoảng cách Cosine (threshold): [0.55 - 0.68], điểm tối ưu = 0.65
+   * - Biên độ điểm sàn (minScore): [0.20 - 0.30], điểm tối ưu = 0.25
+   * - Chuẩn hóa bão hòa FTS (normalizeScore = true): ts_rank / (0.1 + ts_rank) đưa điểm FTS về cùng hệ quy chiếu [0, 1] với Cosine Similarity
+   * - Bảo vệ NULL Vector: Dùng COALESCE((1 - (product.embedding <=> :embedding)), 0) để sách chưa có vector nhưng khớp FTS không bị biến thành NULL.
+   */
   async searchHybridB(
     searchQuery: string,
     limit: number = 10,
@@ -785,27 +799,31 @@ export class ProductsService extends BaseService<Product> {
       options?.threshold !== undefined ? Number(options.threshold) : 0.65;
     const minScore =
       options?.minScore !== undefined ? Number(options.minScore) : 0.25;
-    const normalizeScore = options?.normalizeScore ?? false;
+    // Mặc định bật chuẩn hóa bão hòa FTS (normalizeScore = true) để điểm FTS [0, 1) đồng nhất thang đo với điểm Cosine Similarity [0, 1]
+    const normalizeScore = options?.normalizeScore ?? true;
 
-    // 1. Tạo Vector và FTS Query (Đã lọc stop words & dùng toán tử &)
+    // 1. Tạo Vector 384 chiều và FTS Query (đã lọc stop words & chọn toán tử thích ứng theo độ dài câu)
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
-    const formattedVector = `[${queryVector.join(',')}]`;
+    const hasValidVector = Array.isArray(queryVector) && queryVector.length > 0;
+    const formattedVector = hasValidVector ? `[${queryVector.join(',')}]` : null;
     const ftsQuery = this.buildCleanFtsQuery(
       searchQuery,
       options?.useOrOperator ?? false,
     );
 
-    // Chuẩn hóa điểm nếu được yêu cầu
-    const aiExpr = `(1 - (product.embedding <=> :embedding))`;
+    // Biểu thức điểm AI (dùng COALESCE để nếu sách chưa kịp sinh embedding thì điểm AI = 0, tránh cộng ra NULL làm mất điểm FTS)
+    const aiExpr = hasValidVector
+      ? `COALESCE((1 - (product.embedding <=> :embedding)), 0)`
+      : `0`;
     const ftsExpr = normalizeScore
       ? `(ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)) / (0.1 + ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))))`
       : `ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))`;
 
     // ==========================================
-    // BƯỚC 1: TÌM KIẾM AI ĐỂ LẤY TOP 10 IDs VÀ ĐIỂM SỐ
+    // BƯỚC 1: TÌM KIẾM AI ĐỂ LẤY TOP IDs VÀ ĐIỂM SỐ
     // ==========================================
     const selectExpr =
-      alpha === 0
+      alpha === 0 || !hasValidVector
         ? `${ftsExpr}`
         : alpha === 1
           ? `${aiExpr}`
@@ -820,23 +838,31 @@ export class ProductsService extends BaseService<Product> {
       .andWhere('product.deleted_at IS NULL')
       .andWhere(
         new Brackets((qb) => {
-          if (alpha === 0) {
+          if (alpha === 0 || !hasValidVector) {
             // 100% FTS
             qb.where(
               "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
             );
           } else if (alpha === 1) {
             // 100% Vector AI
-            qb.where(`product.embedding <=> :embedding < ${threshold}`);
+            qb.where(
+              'product.embedding IS NOT NULL AND product.embedding <=> :embedding < :threshold',
+            );
           } else {
-            // Hybrid kết hợp
-            qb.where(`product.embedding <=> :embedding < ${threshold}`).orWhere(
+            // Hybrid kết hợp (Gatekeeper: vượt qua cổng Vector Cosine < threshold HOẶC khớp từ khóa FTS)
+            qb.where(
+              '(product.embedding IS NOT NULL AND product.embedding <=> :embedding < :threshold)',
+            ).orWhere(
               "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
             );
           }
         }),
       )
-      .setParameters({ embedding: formattedVector, ftsQuery })
+      .setParameters({
+        embedding: formattedVector,
+        ftsQuery,
+        threshold,
+      })
       .orderBy('final_score', 'DESC')
       .limit(limit)
       .getRawMany();

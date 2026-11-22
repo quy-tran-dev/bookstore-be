@@ -42,7 +42,8 @@ export class PublicProductsController {
     const options = {
       alpha: alpha !== undefined ? Number(alpha) : undefined,
       threshold: threshold !== undefined ? Number(threshold) : undefined,
-      normalizeScore: normalize === 'true' || normalize === '1',
+      normalizeScore:
+        normalize === 'false' || normalize === '0' ? false : true,
       useOrOperator: useOr === 'true',
     };
 
@@ -87,7 +88,8 @@ export class PublicProductsController {
     const options = {
       alpha: alpha !== undefined ? Number(alpha) : undefined,
       threshold: threshold !== undefined ? Number(threshold) : undefined,
-      normalizeScore: normalize === 'true' || normalize === '1',
+      normalizeScore:
+        normalize === 'false' || normalize === '0' ? false : true,
       useOrOperator: useOr === 'true',
     };
 
@@ -257,6 +259,24 @@ export class PublicProductsController {
     const result = await this.searchBenchmarkService.runGridSearch(algorithm);
     return {
       message: `Chạy Grid Search thuật toán ${algorithm} hoàn tất`,
+      data: result,
+    };
+  }
+
+  /**
+   * ĐÁNH GIÁ TOÀN DIỆN THEO CHUẨN QUỐC TẾ INFORMATION RETRIEVAL (Hit@K, MRR@5, NDCG@5, Precision@5, Recall@5, TNR)
+   * KÈM DÒ TÌM TỶ LỆ % AI - % FTS TỐI ƯU VÀ BIÊN ĐỘ MIN - MAX CỦA NGƯỠNG (THRESHOLD & MIN SCORE)
+   * Endpoint: GET /apis/v1/products/benchmark/ir-evaluation?algorithm=B
+   */
+  @Get('benchmark/ir-evaluation')
+  @CacheTTL(0)
+  async runIrEvaluation(@Query('algorithm') algorithm: 'A' | 'B' = 'B') {
+    const result =
+      await this.searchBenchmarkService.runIrParameterTuningExperiment(
+        algorithm,
+      );
+    return {
+      message: `Đánh giá thực nghiệm chuẩn Information Retrieval (Hit@K, MRR@5, NDCG@5, Precision, Recall, TNR) cho thuật toán ${algorithm} hoàn tất`,
       data: result,
     };
   }
