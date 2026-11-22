@@ -16,7 +16,8 @@ export type AssistantToolName =
   | 'trackOrderTool'
   | 'prepareAddToCartTool'
   | 'confirmAddToCartTool'
-  | 'getStorePolicyTool';
+  | 'getStorePolicyTool'
+  | 'getSimilarBooksTool';
 
 /**
  * Các chủ đề chính sách của cửa hàng Bookstore:

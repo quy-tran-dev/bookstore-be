@@ -31,9 +31,10 @@ Nguyên tắc bắt buộc:
    - Nếu khách hỏi về bất kỳ chính sách hoặc tính năng nào chưa được Bookstore công bố (hoặc công cụ trả về thông báo ngoài phạm vi hỗ trợ), BẮT BUỘC bạn phải thông báo rõ ràng: "Hiện tại Bookstore chưa hỗ trợ hoặc chưa có chính sách này. Yêu cầu này nằm ngoài phạm vi hỗ trợ của trợ lý ảo.", và hướng dẫn khách liên hệ trực tiếp hotline hoặc fanpage của hiệu sách để được hỗ trợ chuyên sâu, TUYỆT ĐỐI KHÔNG tự bịa ra để làm hài lòng khách.
 4. Khi khách hỏi tìm sách, gợi ý sách theo chủ đề, kỹ năng, tác giả hoặc tầm giá, hãy gọi công cụ searchBooksTool.
 5. Khi khách hỏi sâu về thông tin chi tiết của một cuốn sách cụ thể (nhà xuất bản, số trang, tóm tắt nội dung), hãy gọi công cụ getBookDetailTool.
-6. Khi khách hỏi kiểm tra đơn hàng của họ, hãy gọi công cụ trackOrderTool.
-7. Khi khách chọn mua sách hoặc yêu cầu thêm sách vào giỏ hàng, hãy gọi công cụ prepareAddToCartTool và HỎI XÁC NHẬN LẠI khách hàng một lần nữa trước khi chốt.
-8. Trả lời bằng tiếng Việt lịch sự, ngắn gọn, thân thiện và trình bày rõ ràng.`;
+6. Khi khách hỏi gợi ý các cuốn sách tương tự hoặc có nội dung giống với một cuốn sách cụ thể (ví dụ: "sách nào giống cuốn Clean Code"), hãy gọi công cụ getSimilarBooksTool.
+7. Khi khách hỏi kiểm tra đơn hàng của họ, hãy gọi công cụ trackOrderTool.
+8. Khi khách chọn mua sách hoặc yêu cầu thêm sách vào giỏ hàng, hãy gọi công cụ prepareAddToCartTool và HỎI XÁC NHẬN LẠI khách hàng một lần nữa trước khi chốt.
+9. Trả lời bằng tiếng Việt lịch sự, ngắn gọn, thân thiện và trình bày rõ ràng.`;
 
 /**
  * Các mẫu câu phản hồi chuẩn cho hệ thống Guardrail & Trạng thái hội thoại
@@ -155,6 +156,22 @@ export const CHAT_GEMINI_TOOLS = [
                 'Chủ đề chính sách cần tra cứu: "refund" (hoàn tiền/đổi trả), "shipping" (vận chuyển/giao hàng), "payment" (thanh toán), "warranty" (bảo hành/bản quyền), "general" (tổng hợp), hoặc câu hỏi chính sách cụ thể của khách để kiểm tra tính hợp lệ.',
             },
           },
+        },
+      },
+      {
+        name: 'getSimilarBooksTool',
+        description:
+          'Tìm và gợi ý các cuốn sách có nội dung, chủ đề hoặc tư tưởng tương tự với một cuốn sách cụ thể dựa trên độ tương đồng ngữ nghĩa Vector AI (pgvector Cosine Distance).',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            slugOrName: {
+              type: 'STRING',
+              description:
+                'Tên cuốn sách gốc hoặc đường dẫn slug mà khách muốn tìm sách tương tự',
+            },
+          },
+          required: ['slugOrName'],
         },
       },
     ],

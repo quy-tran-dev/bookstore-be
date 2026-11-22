@@ -443,7 +443,31 @@ export class ChatAssistantService {
       };
     }
 
-    // 4. Nhận diện yêu cầu xem chi tiết một cuốn sách cụ thể
+    // 4. Nhận diện yêu cầu tìm sách tương tự / giống với một cuốn sách cụ thể (VD: "Gợi ý sách tương tự cuốn Clean Code")
+    const isSimilarBooksIntent =
+      /(sách (nào )?(tương tự|giống|cùng chủ đề với)|cuốn (nào )?(tương tự|giống)|gợi ý sách (tương tự|giống))/i.test(
+        lower,
+      );
+
+    if (isSimilarBooksIntent) {
+      const cleanedSource = message
+        .replace(
+          /(gợi ý|tìm|cho mình|các|những|cuốn|quyển|sách|nào|có nội dung|tương tự|giống với|giống|như|cùng chủ đề với|nhé|ạ|\?)/gi,
+          ' ',
+        )
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const outcome = await this.chatToolsService.executeGetSimilarBooks({
+        slugOrName: cleanedSource || message,
+      });
+      return {
+        reply: this.buildDeterministicReplyFromOutcome(outcome),
+        outcome,
+      };
+    }
+
+    // 5. Nhận diện yêu cầu xem chi tiết một cuốn sách cụ thể
     const isDetailIntent =
       /(chi tiết cuốn|thông tin cuốn|nhà xuất bản|bao nhiêu trang|số trang|năm xuất bản|tóm tắt cuốn)/i.test(
         lower,
@@ -525,6 +549,10 @@ export class ChatAssistantService {
           topic: combinedTopic || 'general',
         });
       }
+      case 'getSimilarBooksTool':
+        return this.chatToolsService.executeGetSimilarBooks({
+          slugOrName: String(args.slugOrName || args.query || ''),
+        });
       default:
         return this.chatToolsService.executeSearchBooks({
           query: String(args.query || ''),
@@ -653,10 +681,13 @@ export class ChatAssistantService {
   private buildDeterministicReplyFromOutcome(
     outcome: ToolExecutionOutcome,
   ): string {
-    if (outcome.toolName === 'searchBooksTool') {
+    if (outcome.toolName === 'searchBooksTool' || outcome.toolName === 'getSimilarBooksTool') {
       const books = outcome.suggestedProducts || [];
       if (books.length === 0) {
         return outcome.toolOutputText;
+      }
+      if (outcome.toolName === 'getSimilarBooksTool') {
+        return `${outcome.toolOutputText}\n\nBạn có thể nhấn vào thẻ sản phẩm bên dưới để xem chi tiết từng cuốn nhé!`;
       }
       const lines = books.map(
         (b, idx) =>
