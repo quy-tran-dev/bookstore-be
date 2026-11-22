@@ -37,6 +37,7 @@ describe('ChatAssistantService - Kiểm thử Trợ lý AI Tư vấn Khách hàn
     executeTrackOrder: jest.fn(),
     executePrepareAddToCart: jest.fn(),
     executeGetStorePolicy: jest.fn(),
+    executeGetSimilarBooks: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -353,6 +354,37 @@ describe('ChatAssistantService - Kiểm thử Trợ lý AI Tư vấn Khách hàn
     expect(res.usedTool).toBe('getStorePolicyTool');
     expect(res.reply).toContain('chưa hỗ trợ hoặc chưa có chính sách chính thức');
     expect(res.reply).toContain('nằm ngoài phạm vi hỗ trợ');
+  });
+
+  it('phải nhận diện yêu cầu tìm sách tương tự và gọi getSimilarBooksTool', async () => {
+    mockChatToolsService.executeGetSimilarBooks.mockResolvedValueOnce({
+      toolName: 'getSimilarBooksTool',
+      toolOutputText:
+        'Danh sách 1 cuốn sách có nội dung tương đồng nhất với cuốn "Clean Code":\n1. "The Pragmatic Programmer" — Giá: 195.000đ | Độ tương đồng AI: 88%',
+      suggestedProducts: [
+        {
+          id: 'book-sim-1',
+          name: 'The Pragmatic Programmer',
+          slug: 'the-pragmatic-programmer',
+          price: 220000,
+          finalPrice: 195000,
+          stockQuantity: 15,
+        },
+      ],
+    });
+
+    const res = await service.handleUserMessage({
+      message: 'Gợi ý cho mình các cuốn sách tương tự cuốn Clean Code nhé?',
+      sessionId: 'sess-sim-1',
+    });
+
+    expect(mockChatToolsService.executeGetSimilarBooks).toHaveBeenCalledWith({
+      slugOrName: 'Clean Code',
+    });
+    expect(res.usedTool).toBe('getSimilarBooksTool');
+    expect(res.suggestedProducts).toHaveLength(1);
+    expect(res.reply).toContain('The Pragmatic Programmer');
+    expect(res.reply).toContain('88%');
   });
 });
 
