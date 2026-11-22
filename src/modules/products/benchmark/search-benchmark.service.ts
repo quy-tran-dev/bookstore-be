@@ -805,10 +805,16 @@ export class SearchBenchmarkService {
     }
 
     // Xác định biên độ [Threshold_min, Threshold_max]:
-    // - An toàn khi Hit@5 đạt mức cao nhất (không bỏ sót câu hỏi ngữ nghĩa G2) VÀ TNR = 1.0 (chặn 100% từ khóa rác G4)
+    // - An toàn khi Hit@5 đạt mức cao nhất, NDCG@5 duy trì >= 98% đỉnh (không làm rớt các sách liên quan mức 2, 3 của G2) VÀ TNR = 1.0 (chặn 100% từ khóa rác G4)
     const maxHitAt5 = Math.max(...thresholdSweepResults.map((t) => t.hitAt5));
+    const maxNdcgAt5 = Math.max(
+      ...thresholdSweepResults.filter((t) => t.tnr === 1).map((t) => t.ndcgAt5),
+    );
     const safeThresholds = thresholdSweepResults.filter(
-      (t) => t.hitAt5 >= maxHitAt5 && t.tnr === 1,
+      (t) =>
+        t.hitAt5 >= maxHitAt5 &&
+        t.ndcgAt5 >= Number((maxNdcgAt5 * 0.98).toFixed(4)) &&
+        t.tnr === 1,
     );
 
     const minSafeThreshold =
