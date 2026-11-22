@@ -3,6 +3,7 @@ import { ProductsService } from '../products.service';
 import { BENCHMARK_QUERIES, BenchmarkQueryItem } from './benchmark-queries';
 import { BENCHMARK_SCENARIOS, BenchmarkScenarioConfig } from './benchmark-scenarios';
 import { THRESHOLD_CONFIGS_A, THRESHOLD_CONFIGS_B, BenchmarkThresholdConfig } from './benchmark-thresholds';
+import { IrMetricsUtil, SingleQueryIrMetrics } from './utils/ir-metrics.util';
 
 export interface QueryEvaluationResult {
   queryId: number;
@@ -13,6 +14,22 @@ export interface QueryEvaluationResult {
   topBookNames: string[];
   isMatch: boolean;
   status: 'ĐẠT' | 'KHÔNG ĐẠT';
+  latencyMs: number;
+  irMetrics?: SingleQueryIrMetrics;
+}
+
+export interface AggregatedIrMetrics {
+  hitAt1: number;
+  hitAt3: number;
+  hitAt5: number;
+  mrrAt5: number;
+  ndcgAt5: number;
+  precisionAt5: number;
+  recallAt5: number;
+  tnr: number;
+  compositeIrScore: number;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
 }
 
 export interface BenchmarkSummary {
@@ -38,6 +55,7 @@ export interface BenchmarkSummary {
     g4Total: number;
     status: string;
   };
+  irMetrics: AggregatedIrMetrics;
   detailedResults?: QueryEvaluationResult[];
 }
 
@@ -67,6 +85,7 @@ export class SearchBenchmarkService {
         ? await this.productsService.searchHybridA(item.query, 10, options)
         : await this.productsService.searchHybridB(item.query, 10, options);
 
+    const latencyMs = Math.max(1, Date.now() - startTime);
     const topBookNames = results.map((r: any) => r.name as string);
 
     // Kiểm tra nhóm Negative (G4 - Từ khóa rác/không bán: Đạt nếu không trả về kết quả)
@@ -82,18 +101,17 @@ export class SearchBenchmarkService {
         topBookNames: topBookNames.slice(0, 3),
         isMatch,
         status: isMatch ? 'ĐẠT' : 'KHÔNG ĐẠT',
+        latencyMs,
       };
     }
 
-    // Kiểm tra các nhóm có kỳ vọng sách (G1, G2, G3)
-    let isHit = false;
-    for (let i = 0; i < topBookNames.length; i++) {
-      const title = topBookNames[i].toLowerCase();
-      if (item.expectedTitles.some((expected) => title.includes(expected.toLowerCase()))) {
-        isHit = true;
-        break;
-      }
-    }
+    // Tính toán đầy đủ bộ chỉ số IR chuẩn quốc tế (Hit@1, Hit@3, Hit@5, MRR@5, NDCG@5, Precision@5, Recall@5)
+    const irMetrics = IrMetricsUtil.evaluatePositiveQuery(
+      topBookNames,
+      item.gradedRelevance,
+      item.expectedTitles,
+    );
+    const isHit = irMetrics.hitAt5 === 1;
 
     return {
       queryId: item.id,
@@ -104,6 +122,8 @@ export class SearchBenchmarkService {
       topBookNames: topBookNames.slice(0, 5),
       isMatch: isHit,
       status: isHit ? 'ĐẠT' : 'KHÔNG ĐẠT',
+      latencyMs,
+      irMetrics,
     };
   }
 
@@ -151,6 +171,51 @@ export class SearchBenchmarkService {
     const totalPassed = g1Passed + g2Passed + g3Passed + g4Passed;
     const passRatePercent = Math.round((totalPassed / queryResults.length) * 100);
 
+    // Tổng hợp bộ chỉ số IR chuẩn quốc tế trên tập truy vấn dương (G1 + G2 + G3) và truy vấn âm (G4)
+    const positiveItems = queryResults.filter((r) => Boolean(r.irMetrics));
+    const posCount = Math.max(1, positiveItems.length);
+
+    const avg = (getter: (m: SingleQueryIrMetrics) => number) =>
+      Number(
+        (
+          positiveItems.reduce((sum, item) => sum + getter(item.irMetrics!), 0) /
+          posCount
+        ).toFixed(4),
+      );
+
+    const hitAt1 = avg((m) => m.hitAt1);
+    const hitAt3 = avg((m) => m.hitAt3);
+    const hitAt5 = avg((m) => m.hitAt5);
+    const mrrAt5 = avg((m) => m.mrrAt5);
+    const ndcgAt5 = avg((m) => m.ndcgAt5);
+    const precisionAt5 = avg((m) => m.precisionAt5);
+    const recallAt5 = avg((m) => m.recallAt5);
+    const tnr =
+      g4Items.length > 0
+        ? Number((g4Passed / g4Items.length).toFixed(4))
+        : 1;
+
+    // Điểm tổng hợp IR (Composite IR Score):
+    // 35% NDCG@5 (chất lượng thứ hạng đa cấp) + 30% MRR@5 (vị trí xuất hiện đầu tiên) + 15% Hit@5 (độ phủ Top 5) + 20% TNR (khả năng chặn từ khóa rác)
+    const compositeIrScore = Number(
+      (0.35 * ndcgAt5 + 0.3 * mrrAt5 + 0.15 * hitAt5 + 0.2 * tnr).toFixed(4),
+    );
+
+    const sortedLatencies = queryResults
+      .map((r) => r.latencyMs)
+      .sort((a, b) => a - b);
+    const avgLatencyMs = Number(
+      (
+        sortedLatencies.reduce((sum, val) => sum + val, 0) /
+        Math.max(1, sortedLatencies.length)
+      ).toFixed(2),
+    );
+    const p95Index = Math.min(
+      sortedLatencies.length - 1,
+      Math.floor(sortedLatencies.length * 0.95),
+    );
+    const p95LatencyMs = sortedLatencies[p95Index] || 0;
+
     return {
       algorithm,
       parameters: {
@@ -178,6 +243,19 @@ export class SearchBenchmarkService {
             : totalPassed >= 10
               ? 'ĐẠT KHÁ'
               : 'KHÔNG ĐẠT',
+      },
+      irMetrics: {
+        hitAt1,
+        hitAt3,
+        hitAt5,
+        mrrAt5,
+        ndcgAt5,
+        precisionAt5,
+        recallAt5,
+        tnr,
+        compositeIrScore,
+        avgLatencyMs,
+        p95LatencyMs,
       },
       detailedResults: includeDetails ? queryResults : undefined,
     };
@@ -640,6 +718,191 @@ export class SearchBenchmarkService {
           'Bộ lọc ngưỡng (Threshold Gatekeeper và MinScore) có ý nghĩa quyết định: Ngưỡng vector loại bỏ các vector quá phân tán, còn MinScore ngăn chặn các tài liệu có điểm tổng hợp thấp lọt vào danh sách hiển thị.',
         comparativeConclusion:
           'Thực nghiệm đa tổ hợp cho thấy: Khi kết hợp cùng bộ lọc ngưỡng phù hợp (Cosine <= 0.65, MinScore >= 0.25), cả 80-20 và 70-30 đều cho tỷ lệ khớp khả quan hơn trên tập kiểm thử so với 60-40 và 50-50. Người dùng có thể lựa chọn 80-20 nếu ưu tiên tìm kiếm ý niệm/nhu cầu, hoặc 70-30 nếu muốn cân bằng tốt hơn giữa nhu cầu và tên sách cụ thể.',
+      },
+    };
+  }
+
+  /**
+   * HÀM THỰC NGHIỆM CHUYÊN BIỆT: QUÉT TÌM TỶ LỆ % AI - % FTS TỐI ƯU VÀ BIÊN ĐỘ MIN - MAX CỦA NGƯỠNG
+   * THEO CHUẨN INFORMATION RETRIEVAL (Hit@1, Hit@3, Hit@5, MRR@5, NDCG@5, Precision@5, Recall@5, TNR)
+   * -------------------------------------------------------------------------------------------------
+   * Được tách riêng để kiểm thử độc lập trước khi áp dụng thông số vào hàm searchHybridB chính thức.
+   */
+  async runIrParameterTuningExperiment(
+    algorithm: 'A' | 'B' = 'B',
+    customOptions?: {
+      alphas?: number[];
+      thresholds?: number[];
+      minScores?: number[];
+      normalizeScore?: boolean;
+    },
+  ) {
+    const alphas =
+      customOptions?.alphas && customOptions.alphas.length > 0
+        ? customOptions.alphas
+        : [0.0, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 1.0];
+
+    const thresholds =
+      customOptions?.thresholds && customOptions.thresholds.length > 0
+        ? customOptions.thresholds
+        : [0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.68, 0.7, 0.75, 0.8];
+
+    const minScores =
+      customOptions?.minScores && customOptions.minScores.length > 0
+        ? customOptions.minScores
+        : [0.15, 0.2, 0.25, 0.3, 0.35, 0.4];
+
+    const normalizeScore = customOptions?.normalizeScore ?? true;
+
+    // 1. Thí nghiệm 1: Quét dải tỷ lệ Alpha (% AI vs % FTS) tại ngưỡng tiêu chuẩn (threshold = 0.65, minScore = 0.25)
+    const ratioSweepResults: any[] = [];
+    for (const alpha of alphas) {
+      const summary = await this.runBenchmark(
+        algorithm,
+        { alpha, threshold: 0.65, minScore: 0.25, normalizeScore },
+        false,
+      );
+      ratioSweepResults.push({
+        alpha,
+        ftsWeight: Number((1 - alpha).toFixed(2)),
+        ratioLabel: `${Math.round(alpha * 100)}% AI - ${Math.round((1 - alpha) * 100)}% FTS`,
+        ...summary.irMetrics,
+        g2SemanticHitRate: Number(
+          (summary.metrics.g2Passed / Math.max(1, summary.metrics.g2Total)).toFixed(4),
+        ),
+      });
+    }
+
+    // Tìm tỷ lệ Alpha đạt điểm CompositeIR (NDCG@5 + MRR@5 + Hit@5 + TNR) cao nhất
+    const sortedRatios = [...ratioSweepResults].sort(
+      (a, b) =>
+        b.compositeIrScore - a.compositeIrScore ||
+        b.ndcgAt5 - a.ndcgAt5 ||
+        b.mrrAt5 - a.mrrAt5,
+    );
+    const bestRatioConfig = sortedRatios[0];
+
+    // 2. Thí nghiệm 2: Cố định tỷ lệ Alpha tối ưu, quét dải Threshold từ 0.40 -> 0.80 để tìm biên độ [Threshold_min, Threshold_max]
+    const thresholdSweepResults: any[] = [];
+    for (const threshold of thresholds) {
+      const summary = await this.runBenchmark(
+        algorithm,
+        {
+          alpha: bestRatioConfig.alpha,
+          threshold,
+          minScore: 0.25,
+          normalizeScore,
+        },
+        false,
+      );
+      thresholdSweepResults.push({
+        threshold,
+        ...summary.irMetrics,
+        g2SemanticHitRate: Number(
+          (summary.metrics.g2Passed / Math.max(1, summary.metrics.g2Total)).toFixed(4),
+        ),
+      });
+    }
+
+    // Xác định biên độ [Threshold_min, Threshold_max]:
+    // - An toàn khi Hit@5 đạt mức cao nhất (không bỏ sót câu hỏi ngữ nghĩa G2) VÀ TNR = 1.0 (chặn 100% từ khóa rác G4)
+    const maxHitAt5 = Math.max(...thresholdSweepResults.map((t) => t.hitAt5));
+    const safeThresholds = thresholdSweepResults.filter(
+      (t) => t.hitAt5 >= maxHitAt5 && t.tnr === 1,
+    );
+
+    const minSafeThreshold =
+      safeThresholds.length > 0
+        ? Math.min(...safeThresholds.map((t) => t.threshold))
+        : 0.55;
+    const maxSafeThreshold =
+      safeThresholds.length > 0
+        ? Math.max(...safeThresholds.map((t) => t.threshold))
+        : 0.68;
+    const optimalThresholdItem =
+      [...safeThresholds].sort(
+        (a, b) =>
+          b.compositeIrScore - a.compositeIrScore || b.ndcgAt5 - a.ndcgAt5,
+      )[0] || thresholdSweepResults[0];
+
+    // 3. Thí nghiệm 3: Cố định Alpha và Threshold tối ưu, quét dải MinScore từ 0.15 -> 0.40 để tìm biên độ [MinScore_min, MinScore_max]
+    const minScoreSweepResults: any[] = [];
+    for (const minScore of minScores) {
+      const summary = await this.runBenchmark(
+        algorithm,
+        {
+          alpha: bestRatioConfig.alpha,
+          threshold: optimalThresholdItem.threshold,
+          minScore,
+          normalizeScore,
+        },
+        false,
+      );
+      minScoreSweepResults.push({
+        minScore,
+        ...summary.irMetrics,
+      });
+    }
+
+    const maxScoreHitAt5 = Math.max(...minScoreSweepResults.map((m) => m.hitAt5));
+    const safeMinScores = minScoreSweepResults.filter(
+      (m) => m.hitAt5 >= maxScoreHitAt5 && m.tnr === 1,
+    );
+
+    const minSafeScore =
+      safeMinScores.length > 0
+        ? Math.min(...safeMinScores.map((m) => m.minScore))
+        : 0.2;
+    const maxSafeScore =
+      safeMinScores.length > 0
+        ? Math.max(...safeMinScores.map((m) => m.minScore))
+        : 0.3;
+    const optimalMinScoreItem =
+      [...safeMinScores].sort(
+        (a, b) =>
+          b.compositeIrScore - a.compositeIrScore ||
+          b.precisionAt5 - a.precisionAt5,
+      )[0] || minScoreSweepResults[0];
+
+    return {
+      algorithm,
+      normalizeScore,
+      optimalConfiguration: {
+        alpha: bestRatioConfig.alpha,
+        ftsWeight: bestRatioConfig.ftsWeight,
+        ratioLabel: bestRatioConfig.ratioLabel,
+        threshold: optimalThresholdItem.threshold,
+        minScore: optimalMinScoreItem.minScore,
+        metrics: {
+          hitAt1: bestRatioConfig.hitAt1,
+          hitAt3: bestRatioConfig.hitAt3,
+          hitAt5: bestRatioConfig.hitAt5,
+          mrrAt5: bestRatioConfig.mrrAt5,
+          ndcgAt5: bestRatioConfig.ndcgAt5,
+          precisionAt5: bestRatioConfig.precisionAt5,
+          recallAt5: bestRatioConfig.recallAt5,
+          tnr: bestRatioConfig.tnr,
+          compositeIrScore: bestRatioConfig.compositeIrScore,
+        },
+      },
+      thresholdBoundaries: {
+        minSafeThreshold,
+        maxSafeThreshold,
+        optimalThreshold: optimalThresholdItem.threshold,
+        operatingWindow: `[${minSafeThreshold.toFixed(2)}, ${maxSafeThreshold.toFixed(2)}]`,
+        explanation: `Dưới mức ${minSafeThreshold.toFixed(2)} (Strict Bound), câu hỏi ngữ nghĩa dài (G2) bắt đầu bị cắt cụt làm giảm Hit@5 & Recall@5. Trên mức ${maxSafeThreshold.toFixed(2)} (Loose Bound), từ khóa rác ngoài miền (G4) bắt đầu vượt qua Gatekeeper làm giảm TNR.`,
+      },
+      minScoreBoundaries: {
+        minSafeScore,
+        maxSafeScore,
+        optimalMinScore: optimalMinScoreItem.minScore,
+        operatingWindow: `[${minSafeScore.toFixed(2)}, ${maxSafeScore.toFixed(2)}]`,
+        explanation: `Điểm sàn trong khoảng [${minSafeScore.toFixed(2)}, ${maxSafeScore.toFixed(2)}] giúp cắt bỏ phần đuôi nhiễu (tối ưu Precision@5) mà không làm rơi mất các kết quả liên quan (giữ nguyên Recall@5).`,
+      },
+      sweeps: {
+        ratioSweep: ratioSweepResults,
+        thresholdSweep: thresholdSweepResults,
+        minScoreSweep: minScoreSweepResults,
       },
     };
   }
