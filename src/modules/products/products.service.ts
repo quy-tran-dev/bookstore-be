@@ -582,15 +582,10 @@ export class ProductsService extends BaseService<Product> {
   ]);
 
   /**
-   * Chuẩn hóa từ khóa FTS:
-   * 1. Loại bỏ ký tự đặc biệt nguy hiểm cho to_tsquery
-   * 2. Lọc bỏ stop words tiếng Việt
-   * 3. Dùng toán tử & (AND) làm mỏ neo chính xác để chặn đứng từ khóa rác lọt vào
+  /**
+   * Trích xuất danh sách từ có nghĩa sau khi đã loại bỏ ký tự đặc biệt và stop words tiếng Việt
    */
-  private buildCleanFtsQuery(
-    searchQuery: string,
-    useOr: boolean = false,
-  ): string {
+  public extractMeaningfulWords(searchQuery: string): string[] {
     const sanitized = searchQuery
       .trim()
       .toLowerCase()
@@ -598,14 +593,28 @@ export class ProductsService extends BaseService<Product> {
       .replace(/\s+/g, ' ');
 
     const words = sanitized.split(' ').filter(Boolean);
-    if (words.length === 0) return 'empty:*';
+    if (words.length === 0) return [];
 
-    // Lọc stop words
     const meaningfulWords = words.filter(
       (w) => !ProductsService.VIETNAMESE_STOP_WORDS.has(w),
     );
 
-    const targetWords = meaningfulWords.length > 0 ? meaningfulWords : words;
+    return meaningfulWords.length > 0 ? meaningfulWords : words;
+  }
+
+  /**
+   * Chuẩn hóa từ khóa FTS:
+   * 1. Loại bỏ ký tự đặc biệt nguy hiểm cho to_tsquery
+   * 2. Lọc bỏ stop words tiếng Việt
+   * 3. Toán tử FTS thích ứng: Dùng & (AND) cho truy vấn ngắn (<= 3 từ) và | (OR) cho truy vấn dài (> 3 từ)
+   */
+  private buildCleanFtsQuery(
+    searchQuery: string,
+    useOr: boolean = false,
+  ): string {
+    const targetWords = this.extractMeaningfulWords(searchQuery);
+    if (targetWords.length === 0) return 'empty:*';
+
     // Toán tử FTS thích ứng (Adaptive FTS Operator):
     // - Nếu truy vấn ngắn (<= 3 từ có nghĩa, thường là tên sách cụ thể như "Clean Code", "Đắc Nhân Tâm"): dùng '&' (AND) để khớp chặt mặt chữ.
     // - Nếu truy vấn dài (> 3 từ có nghĩa, câu hỏi diễn giải ngữ nghĩa): tự động dùng '|' (OR) để FTS vẫn cộng điểm thưởng cho các sách khớp một phần từ khóa quan trọng.
@@ -628,24 +637,32 @@ export class ProductsService extends BaseService<Product> {
   ) {
     const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.7;
     const ftsWeight = Number((1 - alpha).toFixed(2));
-    const threshold =
+    const rawThreshold =
       options?.threshold !== undefined ? Number(options.threshold) : 1.15;
+    // Quy đổi tự động nếu truyền ngưỡng thang Cosine (<= 0.85) sang thang L2: D_L2 = sqrt(2 * D_Cosine)
+    const threshold =
+      rawThreshold <= 0.85
+        ? Number(Math.sqrt(2 * rawThreshold).toFixed(4))
+        : rawThreshold;
     const minScore =
       options?.minScore !== undefined ? Number(options.minScore) : 0.25;
-    const normalizeScore = options?.normalizeScore ?? false;
+    const normalizeScore = options?.normalizeScore ?? true;
 
-    // 1. Tạo Vector và FTS Query (Đã lọc stop words & dùng toán tử &)
+    // 1. Tạo Vector và FTS Query
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
-    const formattedVector = `[${queryVector.join(',')}]`;
+    const hasValidVector = Array.isArray(queryVector) && queryVector.length > 0;
+    const formattedVector = hasValidVector ? `[${queryVector.join(',')}]` : null;
     const ftsQuery = this.buildCleanFtsQuery(
       searchQuery,
       options?.useOrOperator ?? false,
     );
 
-    // Chuẩn hóa điểm nếu được yêu cầu
-    const aiExpr = normalizeScore
-      ? `GREATEST(0, 1 - (product.embedding <-> :embedding))`
-      : `(1 - (product.embedding <-> :embedding))`;
+    // Chuẩn hóa điểm L2 trên mặt cầu đơn vị MiniLM (D_L2 thuộc [0, 2], vùng tương đồng dương thuộc [0, sqrt(2) ≈ 1.4142])
+    const aiExpr = hasValidVector
+      ? normalizeScore
+        ? `COALESCE(GREATEST(0, 1 - ((product.embedding <-> :embedding) / 1.41421356)), 0)`
+        : `COALESCE(GREATEST(0, 1 - (product.embedding <-> :embedding)), 0)`
+      : `0`;
 
     const ftsExpr = normalizeScore
       ? `(ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)) / (0.1 + ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))))`
@@ -655,7 +672,7 @@ export class ProductsService extends BaseService<Product> {
     // BƯỚC 1: TÌM KIẾM AI L2 DISTANCE ĐỂ LẤY TOP 10 IDs
     // ==========================================
     const selectExpr =
-      alpha === 0
+      alpha === 0 || !hasValidVector
         ? `${ftsExpr}`
         : alpha === 1
           ? `${aiExpr}`
@@ -670,23 +687,27 @@ export class ProductsService extends BaseService<Product> {
       .andWhere('product.deleted_at IS NULL')
       .andWhere(
         new Brackets((qb) => {
-          if (alpha === 0) {
+          if (alpha === 0 || !hasValidVector) {
             // 100% FTS
             qb.where(
               "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
             );
           } else if (alpha === 1) {
             // 100% Vector AI
-            qb.where(`product.embedding <-> :embedding < ${threshold}`);
+            qb.where(
+              'product.embedding IS NOT NULL AND product.embedding <-> :embedding < :threshold',
+            );
           } else {
             // Hybrid kết hợp
-            qb.where(`product.embedding <-> :embedding < ${threshold}`).orWhere(
+            qb.where(
+              '(product.embedding IS NOT NULL AND product.embedding <-> :embedding < :threshold)',
+            ).orWhere(
               "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
             );
           }
         }),
       )
-      .setParameters({ embedding: formattedVector, ftsQuery })
+      .setParameters({ embedding: formattedVector, ftsQuery, threshold })
       .orderBy('final_score', 'DESC')
       .limit(limit)
       .getRawMany();
@@ -773,14 +794,21 @@ export class ProductsService extends BaseService<Product> {
   }
 
   /**
-   * THUẬT TOÁN TÌM KIẾM LAI CHÍNH THỨC (HYBRID SEARCH B: COSINE VECTOR + FULL-TEXT SEARCH)
-   * ---------------------------------------------------------------------------------------
+   * THUẬT TOÁN TÌM KIẾM LAI CHÍNH THỨC (DUAL-ADAPTIVE HYBRID SEARCH B: VECTOR + FULL-TEXT SEARCH)
+   * ----------------------------------------------------------------------------------------------
    * Thông số tối ưu từ thực nghiệm Information Retrieval (NDCG@5, MRR@5, Hit@K, TNR):
    * - Tỷ lệ lai tối ưu: Alpha = 0.70 (70% Vector AI MiniLM - 30% Full-Text Search)
-   * - Biên độ ngưỡng khoảng cách Cosine (threshold): [0.55 - 0.68], điểm tối ưu = 0.65
+   * - Biên độ ngưỡng khoảng cách Cosine (threshold): [0.55 - 0.68], điểm tối ưu = 0.65 (tương đương L2 ≈ 1.1402)
    * - Biên độ điểm sàn (minScore): [0.20 - 0.30], điểm tối ưu = 0.25
-   * - Chuẩn hóa bão hòa FTS (normalizeScore = true): ts_rank / (0.1 + ts_rank) đưa điểm FTS về cùng hệ quy chiếu [0, 1] với Cosine Similarity
-   * - Bảo vệ NULL Vector: Dùng COALESCE((1 - (product.embedding <=> :embedding)), 0) để sách chưa có vector nhưng khớp FTS không bị biến thành NULL.
+   * - Cơ chế Thích ứng Kép (Dual-Adaptive Mechanism - distanceMetric = 'ADAPTIVE' | 'COSINE' | 'L2'):
+   *   1. Truy vấn ngắn (<= 3 từ có nghĩa - tìm đích danh tên sách/tác giả):
+   *      + FTS dùng toán tử '&' (AND) lọc chặt mặt chữ.
+   *      + Vector dùng độ đo L2 (<->) có đạo hàm cự ly gần d(S_L2)/d(D_C) = 1/(2*sqrt(D_C)) > 1 (khi D_C < 0.25),
+   *        giúp khuếch đại biên độ phân tách (discriminative margin) đẩy sách mục tiêu lên Top 1.
+   *   2. Truy vấn dài (> 3 từ có nghĩa - mô tả nhu cầu/ngữ cảnh tự nhiên):
+   *      + FTS dùng toán tử '|' (OR) mở rộng độ phủ từ khóa.
+   *      + Vector dùng độ đo Cosine (<=>) giữ độ suy giảm tuyến tính S_Cosine = 1 - D_C ở vùng trung bình [0.40 - 0.60],
+   *        tránh hiện tượng nén điểm lồi của căn bậc hai L2 làm rớt sách ngữ nghĩa qua ngưỡng minScore.
    */
   async searchHybridB(
     searchQuery: string,
@@ -791,18 +819,43 @@ export class ProductsService extends BaseService<Product> {
       minScore?: number;
       normalizeScore?: boolean;
       useOrOperator?: boolean;
+      distanceMetric?: 'COSINE' | 'L2' | 'ADAPTIVE';
     },
   ) {
     const alpha = options?.alpha !== undefined ? Number(options.alpha) : 0.7;
     const ftsWeight = Number((1 - alpha).toFixed(2));
-    const threshold =
+    const rawThreshold =
       options?.threshold !== undefined ? Number(options.threshold) : 0.65;
+    // Quy đổi tương đương toán học giữa ngưỡng Cosine và L2 trên mặt cầu đơn vị: D_L2 = sqrt(2 * D_Cosine)
+    const cosineThreshold =
+      rawThreshold > 0.85
+        ? Number(((rawThreshold * rawThreshold) / 2).toFixed(4))
+        : rawThreshold;
+    const l2Threshold =
+      rawThreshold > 0.85
+        ? rawThreshold
+        : Number(Math.sqrt(2 * cosineThreshold).toFixed(4));
+
     const minScore =
       options?.minScore !== undefined ? Number(options.minScore) : 0.25;
-    // Mặc định bật chuẩn hóa bão hòa FTS (normalizeScore = true) để điểm FTS [0, 1) đồng nhất thang đo với điểm Cosine Similarity [0, 1]
+    // Mặc định bật chuẩn hóa bão hòa FTS (normalizeScore = true) để điểm FTS [0, 1) đồng nhất thang đo với điểm Vector Similarity [0, 1]
     const normalizeScore = options?.normalizeScore ?? true;
 
-    // 1. Tạo Vector 384 chiều và FTS Query (đã lọc stop words & chọn toán tử thích ứng theo độ dài câu)
+    // 1. Phân tích đặc tính câu truy vấn (số từ có nghĩa sau khi lọc stop words)
+    const meaningfulWords = this.extractMeaningfulWords(searchQuery);
+    const isShortQuery = meaningfulWords.length <= 3;
+
+    // Xác định chế độ đo khoảng cách Vector (COSINE | L2 | ADAPTIVE)
+    // Chỉ sử dụng duy nhất 1 toán tử khoảng cách cho mỗi câu truy vấn để tối ưu hiệu năng quét pgvector
+    const requestedMetric = options?.distanceMetric ?? 'ADAPTIVE';
+    const resolvedMetric: 'COSINE' | 'L2' =
+      requestedMetric === 'ADAPTIVE'
+        ? isShortQuery
+          ? 'L2'
+          : 'COSINE'
+        : requestedMetric;
+
+    // 2. Tạo Vector 384 chiều và FTS Query (đã lọc stop words & chọn toán tử thích ứng theo độ dài câu)
     const queryVector = await this.aiService.generateEmbedding(searchQuery);
     const hasValidVector = Array.isArray(queryVector) && queryVector.length > 0;
     const formattedVector = hasValidVector ? `[${queryVector.join(',')}]` : null;
@@ -811,10 +864,23 @@ export class ProductsService extends BaseService<Product> {
       options?.useOrOperator ?? false,
     );
 
-    // Biểu thức điểm AI (dùng COALESCE để nếu sách chưa kịp sinh embedding thì điểm AI = 0, tránh cộng ra NULL làm mất điểm FTS)
-    const aiExpr = hasValidVector
-      ? `COALESCE((1 - (product.embedding <=> :embedding)), 0)`
-      : `0`;
+    // Biểu thức điểm Vector AI theo chế độ khoảng cách (dùng COALESCE bảo vệ NULL vector)
+    const cosineSimSql = `GREATEST(0, 1 - (product.embedding <=> :embedding))`;
+    const l2SimSql = `GREATEST(0, 1 - ((product.embedding <-> :embedding) / 1.41421356))`;
+
+    let aiExpr = `0`;
+    let vectorGatekeeperCond = `product.embedding IS NOT NULL AND product.embedding <=> :embedding < :cosineThreshold`;
+
+    if (hasValidVector) {
+      if (resolvedMetric === 'COSINE') {
+        aiExpr = `COALESCE(${cosineSimSql}, 0)`;
+        vectorGatekeeperCond = `product.embedding IS NOT NULL AND product.embedding <=> :embedding < :cosineThreshold`;
+      } else {
+        aiExpr = `COALESCE(${l2SimSql}, 0)`;
+        vectorGatekeeperCond = `product.embedding IS NOT NULL AND product.embedding <-> :embedding < :l2Threshold`;
+      }
+    }
+
     const ftsExpr = normalizeScore
       ? `(ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery)) / (0.1 + ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))))`
       : `ts_rank(product.document_with_weights, to_tsquery('simple', :ftsQuery))`;
@@ -845,14 +911,10 @@ export class ProductsService extends BaseService<Product> {
             );
           } else if (alpha === 1) {
             // 100% Vector AI
-            qb.where(
-              'product.embedding IS NOT NULL AND product.embedding <=> :embedding < :threshold',
-            );
+            qb.where(vectorGatekeeperCond);
           } else {
-            // Hybrid kết hợp (Gatekeeper: vượt qua cổng Vector Cosine < threshold HOẶC khớp từ khóa FTS)
-            qb.where(
-              '(product.embedding IS NOT NULL AND product.embedding <=> :embedding < :threshold)',
-            ).orWhere(
+            // Hybrid kết hợp (Gatekeeper: vượt qua cổng Vector < threshold HOẶC khớp từ khóa FTS)
+            qb.where(`(${vectorGatekeeperCond})`).orWhere(
               "product.document_with_weights @@ to_tsquery('simple', :ftsQuery)",
             );
           }
@@ -861,7 +923,8 @@ export class ProductsService extends BaseService<Product> {
       .setParameters({
         embedding: formattedVector,
         ftsQuery,
-        threshold,
+        cosineThreshold,
+        l2Threshold,
       })
       .orderBy('final_score', 'DESC')
       .limit(limit)
