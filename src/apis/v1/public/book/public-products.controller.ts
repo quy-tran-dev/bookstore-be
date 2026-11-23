@@ -42,7 +42,8 @@ export class PublicProductsController {
     const options = {
       alpha: alpha !== undefined ? Number(alpha) : undefined,
       threshold: threshold !== undefined ? Number(threshold) : undefined,
-      normalizeScore: normalize === 'true' || normalize === '1',
+      normalizeScore:
+        normalize === 'false' || normalize === '0' ? false : true,
       useOrOperator: useOr === 'true',
     };
 
@@ -67,8 +68,8 @@ export class PublicProductsController {
   }
 
   /**
-   * TÌM KIẾM SÁCH CHÍNH THỨC (HYBRID SEARCH - KẾT HỢP FTS VÀ AI VECTOR)
-   * Cấu hình tối ưu: Alpha = 0.7, Threshold = 0.65, minScore = 0.25, normalizeScore = false
+   * TÌM KIẾM SÁCH CHÍNH THỨC (DUAL-ADAPTIVE HYBRID SEARCH - KẾT HỢP FTS VÀ AI VECTOR)
+   * Cấu hình tối ưu: Alpha = 0.7, Threshold = 0.65, minScore = 0.25, normalizeScore = true, distanceMetric = ADAPTIVE
    * Endpoint: GET /apis/v1/products/search?keyword=...
    */
   @Get('search')
@@ -79,16 +80,27 @@ export class PublicProductsController {
     @Query('threshold') threshold?: number,
     @Query('normalize') normalize?: string,
     @Query('useOr') useOr?: string,
+    @Query('distanceMetric')
+    distanceMetric?: 'COSINE' | 'L2' | 'ADAPTIVE',
   ) {
     if (!keyword || keyword.trim() === '') {
       throw new BadRequestException('Vui lòng nhập từ khóa tìm kiếm');
     }
 
+    const validMetrics = ['COSINE', 'L2', 'ADAPTIVE'] as const;
+    const normalizedMetric =
+      distanceMetric &&
+      validMetrics.includes(distanceMetric.toUpperCase() as any)
+        ? (distanceMetric.toUpperCase() as 'COSINE' | 'L2' | 'ADAPTIVE')
+        : 'ADAPTIVE';
+
     const options = {
       alpha: alpha !== undefined ? Number(alpha) : undefined,
       threshold: threshold !== undefined ? Number(threshold) : undefined,
-      normalizeScore: normalize === 'true' || normalize === '1',
+      normalizeScore:
+        normalize === 'false' || normalize === '0' ? false : true,
       useOrOperator: useOr === 'true',
+      distanceMetric: normalizedMetric,
     };
 
     const results = await this.productsService.searchHybridB(keyword, limit, options);
@@ -97,13 +109,14 @@ export class PublicProductsController {
       message: 'Tìm kiếm thành công',
       data: {
         keyword: keyword,
-        algorithm: 'Hybrid Search (PostgreSQL FTS + Gemini Vector AI)',
+        algorithm: 'Dual-Adaptive Hybrid Search (PostgreSQL FTS + MiniLM Vector AI)',
         parameters: {
           alpha: options.alpha ?? 0.7,
           ftsWeight: Number((1 - (options.alpha ?? 0.7)).toFixed(2)),
           threshold: options.threshold ?? 0.65,
           normalizeScore: options.normalizeScore,
           useOrOperator: options.useOrOperator,
+          distanceMetric: options.distanceMetric,
         },
         results: results,
         totalRetrieved: results.length,
@@ -120,8 +133,18 @@ export class PublicProductsController {
     @Query('threshold') threshold?: number,
     @Query('normalize') normalize?: string,
     @Query('useOr') useOr?: string,
+    @Query('distanceMetric')
+    distanceMetric?: 'COSINE' | 'L2' | 'ADAPTIVE',
   ) {
-    return this.search(keyword, limit, alpha, threshold, normalize, useOr);
+    return this.search(
+      keyword,
+      limit,
+      alpha,
+      threshold,
+      normalize,
+      useOr,
+      distanceMetric,
+    );
   }
 
   /**
@@ -257,6 +280,48 @@ export class PublicProductsController {
     const result = await this.searchBenchmarkService.runGridSearch(algorithm);
     return {
       message: `Chạy Grid Search thuật toán ${algorithm} hoàn tất`,
+      data: result,
+    };
+  }
+
+  /**
+   * ĐÁNH GIÁ TOÀN DIỆN THEO CHUẨN QUỐC TẾ INFORMATION RETRIEVAL (Hit@K, MRR@5, NDCG@5, Precision@5, Recall@5, TNR)
+   * KÈM DÒ TÌM TỶ LỆ % AI - % FTS TỐI ƯU VÀ BIÊN ĐỘ MIN - MAX CỦA NGƯỠNG (THRESHOLD & MIN SCORE)
+   * Endpoint: GET /apis/v1/products/benchmark/ir-evaluation?algorithm=B
+   */
+  @Get('benchmark/ir-evaluation')
+  @CacheTTL(0)
+  async runIrEvaluation(@Query('algorithm') algorithm: 'A' | 'B' = 'B') {
+    const result =
+      await this.searchBenchmarkService.runIrParameterTuningExperiment(
+        algorithm,
+      );
+    return {
+      message: `Đánh giá thực nghiệm chuẩn Information Retrieval (Hit@K, MRR@5, NDCG@5, Precision, Recall, TNR) cho thuật toán ${algorithm} hoàn tất`,
+      data: result,
+    };
+  }
+
+  /**
+   * ĐỐI SÁNH GIẢI THUẬT KHOẢNG CÁCH VECTOR: COSINE (<=>) VS L2 (<->) VS DUAL-ADAPTIVE
+   * Endpoint: GET /apis/v1/products/benchmark/distance-comparison
+   */
+  @Get('benchmark/distance-comparison')
+  @CacheTTL(0)
+  async runDistanceComparison(
+    @Query('alpha') alpha?: number,
+    @Query('threshold') threshold?: number,
+    @Query('minScore') minScore?: number,
+  ) {
+    const result =
+      await this.searchBenchmarkService.runDistanceMetricComparisonExperiment({
+        alpha: alpha !== undefined ? Number(alpha) : undefined,
+        threshold: threshold !== undefined ? Number(threshold) : undefined,
+        minScore: minScore !== undefined ? Number(minScore) : undefined,
+      });
+    return {
+      message:
+        'Thực nghiệm đối sánh giải thuật khoảng cách Vector (Cosine vs L2 vs Dual-Adaptive) hoàn tất',
       data: result,
     };
   }
