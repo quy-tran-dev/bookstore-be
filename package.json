@@ -23,7 +23,14 @@
     "migration:create": "npm run typeorm migration:create",
     "migration:run": "npm run typeorm migration:run -- -d src/database/data-source.ts",
     "migration:revert": "npm run typeorm migration:revert -- -d src/database/data-source.ts",
-    "seed": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts"
+    "seed": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts",
+    "seed:users": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts --target=users",
+    "seed:categories": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts --target=categories",
+    "seed:authors": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts --target=authors",
+    "seed:books": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts --target=books",
+    "seed:orders": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts --target=orders",
+    "seed:orders:6m": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts --target=orders --count=180 --months=6",
+    "seed:fresh": "ts-node -r tsconfig-paths/register src/database/seeders/run-seeder.ts --fresh"
   },
   "dependencies": {
     "@nestjs-modules/mailer": "^2.3.7",
